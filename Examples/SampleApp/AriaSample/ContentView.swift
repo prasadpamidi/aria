@@ -2,6 +2,10 @@ import Aria
 import AriaApple
 import SwiftUI
 
+#if canImport(FoundationModels)
+    import FoundationModels
+#endif
+
 // MARK: - ContentView
 
 struct ContentView: View {
@@ -123,30 +127,50 @@ struct ContentView: View {
         let messages: [Message] =
             [.system("You are a concise, helpful assistant.")] + history
 
-        let provider = FoundationModelsProvider()
-        var assistantText = ""
         self.transcript.append(.assistant(""))
-
-        do {
-            for try await event in provider.stream(
-                messages: messages,
-                tools: [],
-                options: .init()
-            ) {
-                switch event {
-                case let .textDelta(chunk):
-                    assistantText += chunk
-                    self.updateLastAssistant(text: assistantText)
-                case .messageStop:
-                    return
-                default:
-                    break
-                }
-            }
-        } catch {
-            self.updateLastAssistant(text: "Error: \(error)")
-        }
+        await self.streamFromProvider(messages: messages)
     }
+
+    @MainActor
+    private func streamFromProvider(messages: [Message]) async {
+        #if canImport(FoundationModels)
+            if #available(iOS 26.0, macOS 26.0, *) {
+                await self.streamWithFoundationModels(messages: messages)
+                return
+            }
+        #endif
+        self.updateLastAssistant(
+            text: "FoundationModels requires iOS 26 or macOS 26."
+        )
+    }
+
+    #if canImport(FoundationModels)
+        @available(iOS 26.0, macOS 26.0, *)
+        @MainActor
+        private func streamWithFoundationModels(messages: [Message]) async {
+            let provider = FoundationModelsProvider()
+            var assistantText = ""
+            do {
+                for try await event in provider.stream(
+                    messages: messages,
+                    tools: [],
+                    options: .init()
+                ) {
+                    switch event {
+                    case let .textDelta(chunk):
+                        assistantText += chunk
+                        self.updateLastAssistant(text: assistantText)
+                    case .messageStop:
+                        return
+                    default:
+                        break
+                    }
+                }
+            } catch {
+                self.updateLastAssistant(text: "Error: \(error)")
+            }
+        }
+    #endif
 
     @MainActor
     private func updateLastAssistant(text: String) {
