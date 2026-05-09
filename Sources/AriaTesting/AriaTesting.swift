@@ -11,6 +11,6 @@ import Aria
 /// - `AriaAppleTests` (Apple-specific tests that still use mocks for some layers)
 /// - Consumer test targets
 public enum AriaTesting {
-    /// The current version. Matches `Aria.version` in lockstep.
-    public static let version = Aria.version
+    /// The current version. Matches `AriaInfo.version` in lockstep.
+    public static let version = AriaInfo.version
 }

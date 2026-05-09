@@ -6,14 +6,14 @@ import XCTest
 /// alike — they must not depend on any Apple framework.
 final class AriaTests: XCTestCase {
     func testAriaVersionIsNotEmpty() {
-        XCTAssertFalse(Aria.version.isEmpty, "Aria.version should be set")
+        XCTAssertFalse(AriaInfo.version.isEmpty, "AriaInfo.version should be set")
     }
 
     func testAriaTestingVersionMatchesCore() {
         XCTAssertEqual(
-            Aria.version,
+            AriaInfo.version,
             AriaTesting.version,
-            "AriaTesting.version must track Aria.version exactly"
+            "AriaTesting.version must track AriaInfo.version exactly"
         )
     }
 }
