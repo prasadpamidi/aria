@@ -54,12 +54,27 @@ public struct TokenUsage: Sendable, Equatable, Codable {
 ///
 /// `ProviderEvent` is the producer-side stream type. The agent loop
 /// translates these into `AgentEvent`s for downstream consumers.
+///
+/// Two flavors of tool call exist:
+///
+/// - **Streamed tool call** (`toolCallStart` → `toolCallDelta`* →
+///   `toolCallEnd`): the provider asks the agent to invoke a tool. The
+///   agent collects the call and runs it via its tool registry. Used by
+///   providers whose model emits structured tool-call requests but does
+///   not execute tools itself.
+///
+/// - **Provider-executed tool call** (`toolCallExecuted`): the provider
+///   has already invoked the tool and produced a result. This applies
+///   to providers like Apple FoundationModels whose native session API
+///   resolves tools internally. The agent does not re-execute; it
+///   records the result and surfaces equivalent events to consumers.
 public enum ProviderEvent: Sendable, Equatable {
     case messageStart(messageId: String)
     case textDelta(String)
     case toolCallStart(ToolCall)
     case toolCallDelta(id: String, argumentsDelta: String)
     case toolCallEnd(id: String)
+    case toolCallExecuted(call: ToolCall, result: ToolExecutionResult)
     case messageStop(FinishReason)
     case usage(TokenUsage)
 }

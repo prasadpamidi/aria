@@ -5,8 +5,20 @@ import Foundation
 extension Agent {
     /// What the provider stream produced for a single step.
     struct ProviderStreamResponse {
+        /// All the assistant text the provider streamed (excluding tool
+        /// call arguments and tool results).
         let assistantText: String
+
+        /// Tool calls the provider asked the agent to execute. The agent
+        /// will dispatch each through its tool registry after the stream
+        /// finishes.
         let toolCalls: [ToolCall]
+
+        /// Tool calls the provider already executed itself (e.g.,
+        /// FoundationModels resolves tools in-session). The agent records
+        /// the result without re-executing.
+        let preExecuted: [(call: ToolCall, result: ToolExecutionResult)]
+
         let finishReason: FinishReason
     }
 
@@ -15,23 +27,24 @@ extension Agent {
     /// calls.
     func streamProviderResponse(
         messages: [Message],
-        tools: [ToolDefinition],
+        executableTools: [AnyTool],
         continuation: AsyncThrowingStream<AgentEvent, any Error>.Continuation
     ) async throws -> ProviderStreamResponse {
         var assembler = ToolCallAssembler()
+        var preExecuted: [(call: ToolCall, result: ToolExecutionResult)] = []
         var assistantText = ""
         var finishReason: FinishReason = .endTurn
 
         let stream = self.config.provider.stream(
             messages: messages,
-            tools: tools,
+            executableTools: executableTools,
             options: self.config.generationOptions
         )
 
         for try await event in stream {
             try Task.checkCancellation()
             switch event {
-            case .messageStart:
+            case .messageStart, .usage:
                 continue
             case let .textDelta(chunk):
                 assistantText += chunk
@@ -44,16 +57,20 @@ extension Agent {
                 if let finalized = assembler.end(id: id) {
                     continuation.yield(.toolCallRequested(finalized))
                 }
+            case let .toolCallExecuted(call, result):
+                preExecuted.append((call, result))
+                continuation.yield(.toolCallRequested(call))
+                continuation.yield(.toolExecutionStart(callId: call.id))
+                continuation.yield(.toolExecutionEnd(callId: call.id, result: result))
             case let .messageStop(reason):
                 finishReason = reason
-            case .usage:
-                continue
             }
         }
 
         return ProviderStreamResponse(
             assistantText: assistantText,
             toolCalls: assembler.collected,
+            preExecuted: preExecuted,
             finishReason: finishReason
         )
     }

@@ -14,28 +14,35 @@ extension Agent {
     }
 
     /// Run one step of the agent loop: assemble messages, call the
-    /// provider, accumulate tool calls, execute tools.
+    /// provider, accumulate tool calls, execute tools the agent owns,
+    /// and record any tools the provider already executed.
     func runStep(
         state: AgentState,
         continuation: AsyncThrowingStream<AgentEvent, any Error>.Continuation
     ) async throws -> StepOutcome {
         var workingState = state
         let messagesForProvider = self.buildProviderMessages(state: workingState)
-        let toolDefinitions = self.config.tools.map(\.definition)
 
         continuation.yield(.assistantStart)
 
         let response = try await self.streamProviderResponse(
             messages: messagesForProvider,
-            tools: toolDefinitions,
+            executableTools: self.config.tools,
             continuation: continuation
         )
 
+        let allToolCalls = response.toolCalls + response.preExecuted.map(\.call)
         let assistantMessage = Message.assistant(
             response.assistantText,
-            toolCalls: response.toolCalls
+            toolCalls: allToolCalls
         )
         workingState.messages.append(assistantMessage)
+
+        for entry in response.preExecuted {
+            workingState.messages.append(
+                .tool(callId: entry.call.id, text: Self.renderResult(entry.result))
+            )
+        }
 
         let modelWantsTools = !response.toolCalls.isEmpty
             && response.finishReason == .toolUse
@@ -58,6 +65,16 @@ extension Agent {
             finishReason: response.finishReason,
             isTerminal: false
         )
+    }
+
+    /// Render a `ToolExecutionResult` back into a string suitable for
+    /// embedding in a `tool` message's content.
+    static func renderResult(_ result: ToolExecutionResult) -> String {
+        guard let data = try? result.output.canonicalData(),
+              let string = String(data: data, encoding: .utf8) else {
+            return result.isError ? "(tool error)" : "(tool output)"
+        }
+        return string
     }
 
     private func buildProviderMessages(state: AgentState) -> [Message] {
