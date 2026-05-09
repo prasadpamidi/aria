@@ -1,36 +1,54 @@
-# Aria Sample App
+# AriaSample — SwiftUI Sample App
 
-A starter SwiftUI app demonstrating Aria's intended API.
+A SwiftUI iOS app that consumes the Aria Swift Package as a local dependency. This is the place to build and test Aria features end-to-end while implementation lands.
 
-> **Note:** Aria is in architecture & design phase. This sample is a template; the API references here describe the *target* shape and will compile once core implementation lands.
+## Layout
 
-## Setup
+```
+Examples/SampleApp/
+├── AriaSample.xcodeproj/      Xcode project
+├── AriaSample/                App target sources
+│   ├── AriaSampleApp.swift    Entry point
+│   ├── ContentView.swift      Aria demo view
+│   ├── Item.swift             SwiftData scaffolding (template-generated)
+│   └── Assets.xcassets/
+├── AriaSampleTests/           Unit tests (Swift Testing)
+└── AriaSampleUITests/         UI tests (XCTest)
+```
 
-1. **Create a new Xcode project**: File → New → Project → iOS → App. Choose SwiftUI as the interface.
-2. **Set deployment target** to iOS 17 or later.
-3. **Add Aria as a local Swift Package dependency**:
-   - File → Add Package Dependencies… → Add Local…
-   - Select the root `aria/` directory of this repository.
-   - Add the `Aria`, `AriaApple`, and `AriaTools` library products to your app target.
-4. **Replace `ContentView.swift`** in your new project with the file in this folder.
-5. **Build and run** on an iOS 26+ simulator (FoundationModels availability) once `AriaApple` implementations exist.
+## Package wiring
 
-## Files
+The Xcode project references the Aria Swift Package as a **local** dependency at `../..` (the repo root). Targets:
 
-- [`ContentView.swift`](ContentView.swift) — SwiftUI view demonstrating Aria's intended API. Uses placeholders where implementations are pending.
+| Target | Linked products |
+|---|---|
+| `AriaSample` (app) | `Aria`, `AriaApple` |
+| `AriaSampleTests` | `Aria`, `AriaTesting` |
+| `AriaSampleUITests` | (none — UI tests don't import Aria) |
 
-## What this demonstrates (target API)
+When you make changes to the package, Xcode rebuilds the affected products on next build. No "Update Packages" step needed for local refs.
 
-Once core implementation is complete, this sample will show:
+## Running
 
-- Constructing an `Agent` with `FoundationModelsProvider` and a tool set
-- Streaming `AgentEvent`s into SwiftUI state
-- Tool-call status badges in the UI
-- Persistent conversation history via `SwiftDataChatHistory`
-- Per-thread checkpointing via `SwiftDataCheckpointer`
+```bash
+# Open in Xcode
+open Examples/SampleApp/AriaSample.xcodeproj
 
-## Why this isn't an Xcode project today
+# Or build from CLI
+xcodebuild build \
+  -project Examples/SampleApp/AriaSample.xcodeproj \
+  -scheme AriaSample \
+  -destination 'platform=iOS Simulator,name=iPhone 16'
+```
 
-A standalone Xcode project (`.xcodeproj` / `.xcworkspace`) is best created in Xcode itself; checking one in alongside the package adds noise and friction. The setup steps above are quick, and the resulting project is yours to evolve.
+## Deployment target
 
-If a checked-in sample app becomes valuable later (e.g., for screen recordings, App Store submission, or CI smoke runs), one can be added at that point.
+The project targets iOS 26.4. Aria requires iOS 17+ at the package level; the sample app sets a higher minimum to use FoundationModels (iOS 26+) once `AriaApple.FoundationModelsProvider` lands.
+
+## Bundle identifiers
+
+- App: `com.3theories.AriaSample`
+- Tests: `com.3theories.AriaSampleTests`
+- UI tests: `com.3theories.AriaSampleUITests`
+
+Change these in the project settings if you publish under a different team or bundle prefix.

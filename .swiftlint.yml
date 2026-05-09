@@ -1,0 +1,164 @@
+# SwiftLint configuration for Aria
+# https://realm.github.io/SwiftLint/rule-directory.html
+
+# Files and directories
+excluded:
+  - .build
+  - .swiftpm
+  - DerivedData
+  - build
+  - vendor
+  - Package.resolved
+  - "**/.build"
+  - "**/SourcePackages"
+  - "**/DerivedData"
+  - Examples/SampleApp/AriaSample.xcodeproj
+
+# Opt-in rules (stricter quality bar)
+opt_in_rules:
+  - array_init
+  - attributes
+  - closure_body_length
+  - closure_spacing
+  - contains_over_filter_count
+  - contains_over_filter_is_empty
+  - contains_over_first_not_nil
+  - contains_over_range_nil_comparison
+  - convenience_type
+  - discouraged_object_literal
+  - discouraged_optional_collection
+  - empty_collection_literal
+  - empty_string
+  - explicit_init
+  - fallthrough
+  - fatal_error_message
+  - first_where
+  - flatmap_over_map_reduce
+  - force_unwrapping
+  - implicit_return
+  - implicitly_unwrapped_optional
+  - joined_default_parameter
+  - last_where
+  - legacy_multiple
+  - legacy_random
+  - literal_expression_end_indentation
+  - multiline_arguments
+  - multiline_function_chains
+  - multiline_literal_brackets
+  - multiline_parameters
+  - multiline_parameters_brackets
+  - operator_usage_whitespace
+  - overridden_super_call
+  - pattern_matching_keywords
+  - prefer_self_type_over_type_of_self
+  - prefer_zero_over_explicit_init
+  - private_over_fileprivate
+  - prohibited_super_call
+  - sorted_first_last
+  - static_operator
+  - toggle_bool
+  - unneeded_parentheses_in_closure_argument
+  - vertical_parameter_alignment_on_call
+  - yoda_condition
+
+# Disabled rules
+disabled_rules:
+  - todo                            # Allow TODO comments
+  - line_length                     # Handled by SwiftFormat
+  - trailing_whitespace             # Handled by SwiftFormat
+  - empty_count                     # Conflicts with `count` parameter names
+  - modifier_order                  # Handled by SwiftFormat
+  - trailing_closure                # Breaks closure syntax when auto-fixed
+  - redundant_nil_coalescing        # False-positives on `?? nil`
+  - redundant_type_annotation       # Sometimes intentional
+  - redundant_discardable_let       # Breaks `let _ = expr` for side effects
+
+# Limits
+file_length:
+  warning: 400
+  error: 600
+  ignore_comment_only_lines: true
+
+type_body_length:
+  warning: 250
+  error: 400
+
+function_body_length:
+  warning: 40
+  error: 80
+
+function_parameter_count:
+  warning: 6
+  error: 8
+
+cyclomatic_complexity:
+  warning: 8
+  error: 15
+  ignores_case_statements: true
+
+nesting:
+  type_level:
+    warning: 2
+  function_level:
+    warning: 3
+
+closure_body_length:
+  warning: 20
+  error: 40
+
+# Identifier naming
+identifier_name:
+  min_length:
+    warning: 2
+    error: 1
+  max_length:
+    warning: 50
+    error: 60
+  excluded:
+    - id
+    - i
+    - j
+    - k
+    - x
+    - y
+    - z
+    - vm
+
+type_name:
+  min_length: 3
+  max_length:
+    warning: 50
+    error: 60
+  excluded:
+    - ID
+    - URL
+    - UUID
+    - LLM
+
+# Custom rules — Aria-specific architectural guards
+custom_rules:
+  no_apple_imports_in_core:
+    name: "No Apple-only imports in Aria core"
+    regex: '^import (UIKit|AppKit|SwiftUI|WatchKit|FoundationModels|CoreML|NaturalLanguage|Combine|OSLog|EventKit|HealthKit|Contacts|CoreLocation|AVFoundation|Photos|MLX|MLXNN)'
+    match_kinds:
+      - identifier
+    message: "Apple-only imports are forbidden in the Aria core target. Move this code to AriaApple or define a protocol."
+    included: ".*Sources/Aria/.*\\.swift"
+    severity: error
+
+  no_oslog_in_core:
+    name: "No os_log in Aria core"
+    regex: '\bos_log\b'
+    message: "os_log is forbidden in core. Use the Logger from swift-log instead."
+    included: ".*Sources/Aria/.*\\.swift"
+    severity: error
+
+  no_dispatch_queue_in_core:
+    name: "No DispatchQueue in Aria core"
+    regex: '\bDispatchQueue\b'
+    message: "DispatchQueue is forbidden in core. Use Swift Concurrency (Task, actor, AsyncStream)."
+    included: ".*Sources/Aria/.*\\.swift"
+    severity: error
+
+# Reporter
+reporter: "xcode"

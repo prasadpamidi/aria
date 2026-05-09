@@ -1,0 +1,7 @@
+# Fastlane Appfile
+# https://docs.fastlane.tools/advanced/#appfile
+#
+# Aria is a library, not an App Store app, so most Appfile keys are unused.
+# We keep team_id available for any future code-signing lanes.
+
+team_id(ENV["APPLE_TEAM_ID"] || "259ZX2VB4Z")

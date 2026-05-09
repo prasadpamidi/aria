@@ -66,21 +66,60 @@ jobs:
         run: swift run AriaCLI
 
   # ------------------------------------------------------------------
-  # iOS — smoke build for the simulator.
-  # Confirms the package compiles for iOS even though most tests run
-  # in the macOS job above.
+  # iOS — build AriaSample on iOS Simulator (also exercises AriaApple).
   # ------------------------------------------------------------------
-  ios-smoke:
-    name: iOS — Simulator Smoke Build
+  ios-sample:
+    name: iOS — AriaSample Build
     runs-on: macos-15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build for iOS Simulator
+      - name: Build AriaSample for iOS Simulator
         run: |
           xcodebuild build \
-            -scheme Aria \
+            -project Examples/SampleApp/AriaSample.xcodeproj \
+            -scheme AriaSample \
             -destination 'generic/platform=iOS Simulator' \
             -skipPackagePluginValidation \
-            -quiet
+            CODE_SIGN_IDENTITY='' \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+  # ------------------------------------------------------------------
+  # Quality — SwiftFormat + SwiftLint checks across the codebase.
+  # ------------------------------------------------------------------
+  quality:
+    name: Quality — SwiftFormat & SwiftLint
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tooling
+        run: brew install swiftformat swiftlint
+
+      - name: Show tool versions
+        run: |
+          swiftformat --version
+          swiftlint version
+
+      - name: SwiftFormat (lint)
+        run: |
+          swiftformat \
+            Sources Tests Examples/AriaCLI \
+            Examples/SampleApp/AriaSample \
+            Examples/SampleApp/AriaSampleTests \
+            Examples/SampleApp/AriaSampleUITests \
+            --config .swiftformat \
+            --lint
+
+      - name: SwiftLint
+        run: |
+          swiftlint lint \
+            Sources Tests Examples/AriaCLI \
+            Examples/SampleApp/AriaSample \
+            Examples/SampleApp/AriaSampleTests \
+            Examples/SampleApp/AriaSampleUITests \
+            --config .swiftlint.yml \
+            --strict

@@ -2,7 +2,6 @@
 .build/
 .swiftpm/
 Package.resolved
-*.xcodeproj
 DerivedData/
 
 # macOS
@@ -32,6 +31,12 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+fastlane/build_logs
+fastlane/README.md
+
+# Bundler
+.bundle/
+vendor/bundle/
 
 # Editor / IDE
 .vscode/
