@@ -81,7 +81,25 @@ swift build                                # build the package
 swift test                                 # run all tests
 swift test --filter AriaTests              # core tests (Linux-safe)
 swift run AriaCLI                          # run the CLI demo
+
+# iOS sample app
+open Examples/SampleApp/AriaSample.xcodeproj
 ```
+
+### Fastlane
+
+Routine work goes through Fastlane lanes. Set up with `brew bundle && bundle install`, then:
+
+```bash
+bundle exec fastlane package_tests       # swift test
+bundle exec fastlane sample_build        # build AriaSample on iOS Simulator
+bundle exec fastlane lint                # SwiftLint
+bundle exec fastlane format              # SwiftFormat (in place)
+bundle exec fastlane quality             # format --lint + lint
+bundle exec fastlane quality fix:true    # auto-fix both
+```
+
+See [`AGENTS.md`](AGENTS.md) for the full lane reference.
 
 ## Documentation
 

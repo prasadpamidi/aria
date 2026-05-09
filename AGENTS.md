@@ -46,24 +46,63 @@ aria/
 
 ## Build and test commands
 
+### Swift Package (CLI)
+
 ```bash
-# Build the whole package (macOS or Linux)
-swift build
+swift build                              # build all targets
+swift build --target Aria                # build only platform-agnostic core
+swift test                               # all tests
+swift test --filter AriaTests            # core tests (Linux-safe)
+swift run AriaCLI                        # CLI demo
+```
 
-# Build only the platform-agnostic core
-swift build --target Aria
+### AriaSample (iOS app)
 
-# Run all tests
-swift test
+```bash
+# Open in Xcode
+open Examples/SampleApp/AriaSample.xcodeproj
 
-# Run only core tests (works on Linux)
-swift test --filter AriaTests
+# Build from CLI
+xcodebuild build \
+  -project Examples/SampleApp/AriaSample.xcodeproj \
+  -scheme AriaSample \
+  -destination 'platform=iOS Simulator,name=iPhone 17'
+```
 
-# Run the CLI demo
-swift run AriaCLI
+### Fastlane (preferred for routine work)
 
-# iOS simulator smoke build
-xcodebuild -scheme Aria -destination 'generic/platform=iOS Simulator' build
+```bash
+# Package
+bundle exec fastlane package_build       # swift build
+bundle exec fastlane package_tests       # swift test
+bundle exec fastlane core_tests          # swift test --filter AriaTests
+bundle exec fastlane cli_demo            # swift run AriaCLI
+
+# Sample app
+bundle exec fastlane sample_build        # build AriaSample on iOS Simulator
+bundle exec fastlane sample_tests        # run AriaSample tests on iOS Simulator
+bundle exec fastlane sample_build device:'iPhone 17 Pro' clean:true
+
+# Code quality
+bundle exec fastlane format              # SwiftFormat in place
+bundle exec fastlane format lint:true    # SwiftFormat check only
+bundle exec fastlane lint                # SwiftLint
+bundle exec fastlane lint fix:true       # SwiftLint --fix
+bundle exec fastlane quality             # format --lint + lint
+bundle exec fastlane quality fix:true    # auto-fix both
+
+# CI shortcuts
+bundle exec fastlane ci_quality          # used by the GitHub Actions quality job
+bundle exec fastlane ci_build_test       # package_tests + sample_build
+```
+
+If `fastlane` is on your PATH (via rbenv or system gems), the `bundle exec` prefix is optional; `fastlane <lane>` works directly. CI uses `bundle exec` for reproducibility.
+
+### Local tooling setup (one-time)
+
+```bash
+brew bundle             # installs swiftformat, swiftlint
+bundle install          # installs fastlane (or use system fastlane)
 ```
 
 ## The platform boundary (CRITICAL)

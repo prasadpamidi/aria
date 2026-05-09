@@ -1,30 +1,26 @@
-// Aria Sample App — ContentView.swift
-//
-// Drop this into a new Xcode iOS App project that depends on the Aria
-// Swift Package. See README.md in this folder for setup steps.
-//
-// This file demonstrates Aria's intended API. It compiles against the
-// scaffolding in the current Aria package; the actual agent calls are
-// commented out where they reference types pending implementation.
-
-import SwiftUI
 import Aria
-// import AriaApple   // uncomment once AriaApple implementations land
-// import AriaTools   // uncomment when consumer tools are needed
+import AriaApple
+import SwiftUI
+
+// MARK: - ContentView
 
 struct ContentView: View {
-    @State private var input: String = ""
-    @State private var transcript: [TranscriptItem] = []
-    @State private var isStreaming: Bool = false
+    // MARK: Internal
 
     var body: some View {
         VStack(spacing: 0) {
-            header
-            messageList
-            inputBar
+            self.header
+            self.messageList
+            self.inputBar
         }
         .background(Color(.systemBackground))
     }
+
+    // MARK: Private
+
+    @State private var input: String = ""
+    @State private var transcript: [TranscriptItem] = []
+    @State private var isStreaming: Bool = false
 
     // MARK: - Subviews
 
@@ -33,7 +29,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Aria Sample")
                     .font(.headline)
-                Text("v\(Aria.version)")
+                Text("Aria \(Aria.version)  ·  AriaApple \(AriaApple.version)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -48,14 +44,18 @@ struct ContentView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(transcript) { item in
-                        TranscriptItemView(item: item)
-                            .id(item.id)
+                    if self.transcript.isEmpty {
+                        self.emptyState
+                    } else {
+                        ForEach(self.transcript) { item in
+                            TranscriptItemView(item: item)
+                                .id(item.id)
+                        }
                     }
                 }
                 .padding()
             }
-            .onChange(of: transcript.count) { _, _ in
+            .onChange(of: self.transcript.count) { _, _ in
                 if let last = transcript.last {
                     withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                 }
@@ -63,35 +63,51 @@ struct ContentView: View {
         }
     }
 
+    private var emptyState: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 36))
+                .foregroundStyle(.secondary)
+            Text("Aria package wired up.")
+                .font(.headline)
+            Text("Agent implementation is pending.\nSend a message to see the placeholder echo.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 80)
+    }
+
     private var inputBar: some View {
         HStack(spacing: 8) {
-            TextField("Ask anything…", text: $input, axis: .vertical)
+            TextField("Ask anything…", text: self.$input, axis: .vertical)
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...4)
-                .disabled(isStreaming)
+                .disabled(self.isStreaming)
 
             Button {
-                Task { await send() }
+                Task { await self.send() }
             } label: {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.title2)
             }
-            .disabled(input.trimmingCharacters(in: .whitespaces).isEmpty || isStreaming)
+            .disabled(self.input.trimmingCharacters(in: .whitespaces).isEmpty || self.isStreaming)
         }
         .padding()
         .background(Color(.secondarySystemBackground))
     }
 
-    // MARK: - Actions
-
     @MainActor
     private func send() async {
-        let trimmed = input.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
+        let trimmed = self.input.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else {
+            return
+        }
 
-        transcript.append(.user(trimmed))
-        input = ""
-        isStreaming = true
+        self.transcript.append(.user(trimmed))
+        self.input = ""
+        self.isStreaming = true
         defer { isStreaming = false }
 
         // ┌────────────────────────────────────────────────────────────────┐
@@ -117,8 +133,7 @@ struct ContentView: View {
         //                 transcript[transcript.count - 1] = last
         //             }
         //         case .toolCallRequested(let call):
-        //             // Show a tool badge — left as an exercise.
-        //             _ = call
+        //             _ = call    // surface a tool badge — exercise for the reader
         //         case .finish:
         //             return
         //         case .error(let err):
@@ -136,18 +151,18 @@ struct ContentView: View {
 
         // Placeholder behavior until implementation lands:
         try? await Task.sleep(for: .milliseconds(400))
-        transcript.append(.assistant("(Aria implementation pending — sample app placeholder.)"))
+        self.transcript.append(.assistant("(Aria \(Aria.version) — implementation pending. Echo: \(trimmed))"))
     }
 }
 
-// MARK: - Local types
+// MARK: - TranscriptItem
 
 struct TranscriptItem: Identifiable {
+    enum Role { case user, assistant }
+
     let id = UUID()
     var role: Role
     var content: String
-
-    enum Role { case user, assistant }
 
     static func user(_ text: String) -> TranscriptItem {
         .init(role: .user, content: text)
@@ -158,30 +173,38 @@ struct TranscriptItem: Identifiable {
     }
 }
 
+// MARK: - TranscriptItemView
+
 struct TranscriptItemView: View {
+    // MARK: Internal
+
     let item: TranscriptItem
 
     var body: some View {
         HStack(alignment: .top) {
-            if item.role == .assistant {
-                bubble
+            if self.item.role == .assistant {
+                self.bubble
                 Spacer(minLength: 40)
             } else {
                 Spacer(minLength: 40)
-                bubble
+                self.bubble
             }
         }
     }
 
+    // MARK: Private
+
     private var bubble: some View {
-        Text(item.content)
+        Text(self.item.content)
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(item.role == .user
-                          ? Color.accentColor.opacity(0.15)
-                          : Color(.tertiarySystemBackground))
+                    .fill(
+                        self.item.role == .user
+                            ? Color.accentColor.opacity(0.15)
+                            : Color(.tertiarySystemBackground)
+                    )
             )
     }
 }

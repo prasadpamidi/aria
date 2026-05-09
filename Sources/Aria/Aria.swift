@@ -1,6 +1,8 @@
 import Foundation
 import Logging
 
+// MARK: - Aria
+
 /// Aria — Composable on-device agent runtime for Apple platforms.
 ///
 /// This is the platform-agnostic core. The protocols and types in this module
@@ -22,4 +24,4 @@ public enum Aria {
 
 /// Internal logger used by core types. Backends are installed by the platform
 /// module (e.g., `AriaApple` installs an `OSLog` backend) or by the consumer.
-internal let ariaLogger = Logger(label: "com.aria.core")
+let ariaLogger = Logger(label: "com.aria.core")

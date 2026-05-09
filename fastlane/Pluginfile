@@ -1,0 +1,3 @@
+# Fastlane Pluginfile
+# Aria does not currently require any Fastlane plugins.
+# Add gems here when needed — e.g., `gem "fastlane-plugin-xyz"`.

@@ -1,0 +1,108 @@
+# SwiftFormat configuration for Aria
+# https://github.com/nicklockwood/SwiftFormat
+
+--swiftversion 5.10
+
+# File Options
+--exclude .build,.swiftpm,DerivedData,build,vendor,Examples/SampleApp/AriaSample.xcodeproj
+
+# Format Options
+--maxwidth 120
+--indent 4
+--tabwidth 4
+--indentcase false
+--trimwhitespace always
+--commas inline
+--semicolons inline
+--stripunusedargs closure-only
+--xcodeindentation enabled
+
+# Wrapping
+--wraparguments before-first
+--wrapparameters before-first
+--wrapcollections before-first
+--wrapternary before-operators
+--wrapreturntype preserve
+--wrapconditions after-first
+--wrapeffects preserve
+--closingparen balanced
+
+# Spacing
+--emptybraces spaced
+--nospaceoperators ...,..<
+--ranges spaced
+
+# Blank Lines
+--typeblanklines remove
+
+# Conditionals & Guards
+--ifdef indent
+--elseposition same-line
+--guardelse same-line
+
+# Organization
+--importgrouping testable-bottom
+--organizetypes actor,class,enum,struct
+--extensionacl on-declarations
+
+# MARK Comments
+--marktypes always
+--markextensions always
+--categorymark "MARK: %c"
+--beforemarks ""
+--lifecycle "viewDidLoad,viewWillAppear,viewDidAppear,viewWillDisappear,viewDidDisappear,body"
+
+# Modifier Order
+--modifierorder private,fileprivate,internal,public,final,open,override,static,class,lazy,required,convenience,optional,weak,unowned,dynamic,mutating,nonmutating,nonisolated
+
+# Closures
+--closurevoid remove
+
+# Other
+--self insert
+--selfrequired
+--header strip
+--redundanttype infer-locals-only
+
+# Enable Rules
+--enable isEmpty
+--enable sortImports
+--enable redundantSelf
+--enable trailingClosures
+--enable consecutiveSpaces
+--enable duplicateImports
+--enable redundantParens
+--enable redundantReturn
+--enable redundantVoidReturnType
+--enable unusedArguments
+--enable void
+--enable blankLinesBetweenScopes
+--enable blockComments
+--enable blankLinesAtStartOfScope
+--enable blankLinesAtEndOfScope
+--enable consecutiveBlankLines
+--enable emptyBraces
+--enable hoistPatternLet
+--enable markTypes
+--enable organizeDeclarations
+--enable preferKeyPath
+--enable sortTypealiases
+--enable spaceAroundGenerics
+--enable strongOutlets
+--enable todos
+--enable wrapConditionalBodies
+--enable wrapMultilineConditionalAssignment
+--enable docComments
+--enable enumNamespaces
+--enable fileHeader
+
+# Disable Rules
+--disable wrapMultilineStatementBraces
+--disable redundantClosure
+--disable redundantOptionalBinding
+--disable redundantPattern
+--disable sortDeclarations
+--disable andOperator
+--disable wrapEnumCases
+--disable wrapSwitchCases
+--disable acronyms

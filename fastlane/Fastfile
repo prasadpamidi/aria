@@ -1,0 +1,229 @@
+# frozen_string_literal: true
+
+# Fastfile for Aria
+# Lanes for building, testing, and quality-checking the Swift package and the
+# AriaSample iOS demo app.
+#
+# Usage examples:
+#   bundle exec fastlane package_build      # swift build
+#   bundle exec fastlane package_tests      # swift test (all targets)
+#   bundle exec fastlane core_tests         # swift test --filter AriaTests (Linux-safe)
+#   bundle exec fastlane sample_build       # build AriaSample on iOS Simulator
+#   bundle exec fastlane sample_tests       # run AriaSample tests on iOS Simulator
+#   bundle exec fastlane lint               # SwiftLint
+#   bundle exec fastlane lint fix:true      # SwiftLint --fix
+#   bundle exec fastlane format             # SwiftFormat (in place)
+#   bundle exec fastlane format lint:true   # SwiftFormat --lint (no writes)
+#   bundle exec fastlane quality            # format --lint + lint
+#   bundle exec fastlane ci_quality         # quality, CI-friendly
+#   bundle exec fastlane ci_build_test      # package_tests + sample_build
+#   bundle exec fastlane clean              # clear build artifacts
+
+default_platform(:ios)
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+PROJECT_ROOT = File.expand_path("..", __dir__)
+SAMPLE_PROJECT = File.join(PROJECT_ROOT, "Examples/SampleApp/AriaSample.xcodeproj")
+SAMPLE_SCHEME = "AriaSample"
+DEFAULT_SIMULATOR = "iPhone 17"
+
+# Paths SwiftFormat / SwiftLint should cover (relative to repo root)
+QUALITY_PATHS = [
+  "Sources",
+  "Tests",
+  "Examples/AriaCLI",
+  "Examples/SampleApp/AriaSample",
+  "Examples/SampleApp/AriaSampleTests",
+  "Examples/SampleApp/AriaSampleUITests"
+].freeze
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def in_root(command)
+  sh("cd '#{PROJECT_ROOT}' && #{command}")
+end
+
+def simulator_destination(options)
+  if options[:id]
+    "platform=iOS Simulator,id=#{options[:id]}"
+  elsif options[:device]
+    "platform=iOS Simulator,name=#{options[:device]}"
+  else
+    "platform=iOS Simulator,name=#{DEFAULT_SIMULATOR}"
+  end
+end
+
+def quality_paths_string
+  QUALITY_PATHS.map { |p| "\"#{File.join(PROJECT_ROOT, p)}\"" }.join(" ")
+end
+
+# ---------------------------------------------------------------------------
+# Swift Package lanes
+# ---------------------------------------------------------------------------
+
+platform :ios do
+  desc "Build the Swift package (all targets)"
+  lane :package_build do
+    in_root("swift build")
+    UI.success("Swift package build complete")
+  end
+
+  desc "Run all Swift package tests"
+  lane :package_tests do
+    in_root("swift test")
+    UI.success("Swift package tests passed")
+  end
+
+  desc "Run only the platform-agnostic core tests (Linux-safe)"
+  lane :core_tests do
+    in_root("swift test --filter AriaTests")
+    UI.success("Core tests passed")
+  end
+
+  desc "Run the CLI demo (`swift run AriaCLI`)"
+  lane :cli_demo do
+    in_root("swift run AriaCLI")
+  end
+
+  # -----------------------------------------------------------------------
+  # AriaSample (Xcode) lanes
+  # -----------------------------------------------------------------------
+
+  desc "Build AriaSample for iOS Simulator"
+  desc "Options:"
+  desc "  device:'iPhone 17'   - Simulator by name"
+  desc "  id:'<uuid>'          - Simulator by UDID"
+  desc "  clean:true           - Clean before building"
+  lane :sample_build do |options|
+    destination = simulator_destination(options)
+    UI.message("Building AriaSample for: #{destination}")
+
+    xcodebuild(
+      project: SAMPLE_PROJECT,
+      scheme: SAMPLE_SCHEME,
+      configuration: "Debug",
+      destination: destination,
+      build: true,
+      clean: options[:clean] || false,
+      xcargs: "CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO"
+    )
+
+    UI.success("AriaSample build complete")
+  end
+
+  desc "Run AriaSample tests on iOS Simulator"
+  desc "Options: device, id, clean — same as sample_build"
+  lane :sample_tests do |options|
+    destination = simulator_destination(options)
+    UI.message("Testing AriaSample on: #{destination}")
+
+    run_tests(
+      project: SAMPLE_PROJECT,
+      scheme: SAMPLE_SCHEME,
+      destination: destination,
+      clean: options[:clean] || false,
+      code_coverage: true
+    )
+
+    UI.success("AriaSample tests passed")
+  end
+
+  # -----------------------------------------------------------------------
+  # Code quality lanes
+  # -----------------------------------------------------------------------
+
+  desc "Run SwiftLint across Aria sources"
+  desc "Options:"
+  desc "  fix:true     - Auto-correct violations where possible"
+  desc "  strict:true  - Fail on warnings (default: false)"
+  lane :lint do |options|
+    config = File.join(PROJECT_ROOT, ".swiftlint.yml")
+    mode = options[:fix] ? "--fix" : "lint"
+    strict_flag = options[:strict] ? " --strict" : ""
+
+    UI.message("Running SwiftLint#{options[:fix] ? ' (fix)' : ''}...")
+
+    begin
+      sh("swiftlint #{mode} #{quality_paths_string} --config \"#{config}\"#{strict_flag}")
+      UI.success("SwiftLint passed")
+    rescue StandardError
+      if options[:strict]
+        UI.user_error!("SwiftLint failed in strict mode")
+      else
+        UI.important("SwiftLint reported violations")
+      end
+    end
+  end
+
+  desc "Run SwiftFormat across Aria sources"
+  desc "Options:"
+  desc "  lint:true     - Check only, do not modify files"
+  desc "  verbose:true  - Show detailed output"
+  lane :format do |options|
+    config = File.join(PROJECT_ROOT, ".swiftformat")
+    extra = []
+    extra << "--lint" if options[:lint]
+    extra << "--verbose" if options[:verbose]
+
+    cmd = ["swiftformat", quality_paths_string, "--config", "\"#{config}\"", *extra].join(" ")
+
+    UI.message("Running SwiftFormat#{options[:lint] ? ' (lint)' : ''}...")
+
+    begin
+      sh(cmd)
+      UI.success("SwiftFormat passed")
+    rescue StandardError
+      if options[:lint]
+        UI.user_error!("SwiftFormat found formatting issues")
+      else
+        raise
+      end
+    end
+  end
+
+  desc "Run all code-quality checks (format --lint + lint)"
+  desc "Options: fix:true to auto-fix both"
+  lane :quality do |options|
+    if options[:fix]
+      format
+      lint(fix: true)
+    else
+      format(lint: true)
+      lint
+    end
+
+    UI.success("All quality checks complete")
+  end
+
+  # -----------------------------------------------------------------------
+  # CI lanes
+  # -----------------------------------------------------------------------
+
+  desc "CI: build and test everything (package + sample)"
+  lane :ci_build_test do
+    package_tests
+    sample_build
+  end
+
+  desc "CI: format check + lint"
+  lane :ci_quality do
+    format(lint: true)
+    lint(strict: false)
+  end
+
+  # -----------------------------------------------------------------------
+  # Utilities
+  # -----------------------------------------------------------------------
+
+  desc "Clear build artifacts"
+  lane :clean do
+    in_root("rm -rf .build .swiftpm/.build Examples/SampleApp/build")
+    clear_derived_data
+    UI.success("Build artifacts cleaned")
+  end
+end

@@ -12,20 +12,26 @@ This file is for Claude Code specifically. The primary AI guidance lives in [AGE
 ## Common commands
 
 ```bash
-# Build
-swift build
-swift build --target Aria          # core only
+# Package
+swift build                              # build all targets
+swift test                               # all tests
+swift test --filter AriaTests            # core tests (Linux-safe)
+swift run AriaCLI                        # CLI demo
 
-# Test
-swift test
-swift test --filter AriaTests      # core tests only
+# Fastlane (preferred)
+bundle exec fastlane package_tests       # swift test wrapped
+bundle exec fastlane core_tests          # core tests only
+bundle exec fastlane sample_build        # build AriaSample on iOS Simulator
+bundle exec fastlane lint                # SwiftLint
+bundle exec fastlane format              # SwiftFormat
+bundle exec fastlane quality             # both, lint mode
+bundle exec fastlane quality fix:true    # both, auto-fix
 
-# Run CLI demo
-swift run AriaCLI
-
-# iOS smoke
-xcodebuild -scheme Aria -destination 'generic/platform=iOS Simulator' build
+# AriaSample directly
+open Examples/SampleApp/AriaSample.xcodeproj
 ```
+
+See `AGENTS.md` for the full lane reference.
 
 ## When working in this repo
 
