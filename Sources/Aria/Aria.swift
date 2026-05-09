@@ -1,20 +1,18 @@
 import Foundation
 import Logging
 
-// MARK: - Aria
+// MARK: - AriaInfo
 
-/// Aria — Composable on-device agent runtime for Apple platforms.
+/// Package metadata for Aria.
 ///
-/// This is the platform-agnostic core. The protocols and types in this module
-/// describe agent orchestration, the LLM provider boundary, memory, and the
-/// optional graph layer — all without any Apple-platform dependencies.
+/// Named `AriaInfo` rather than `Aria` so the module name remains usable for
+/// module-qualified type references inside the package
+/// (e.g. `Aria.GenerationOptions` in modules that also import frameworks
+/// with same-named types).
 ///
-/// For Apple-specific implementations (FoundationModels, MLX, Core ML,
-/// NLEmbedding, SwiftData, sqlite-vec, OSLog) see the `AriaApple` module.
-///
-/// Documentation lives in the `docs/` folder of the repository, organized by
-/// architectural layer. Start with `docs/overview.md`.
-public enum Aria {
+/// For the architecture and design, see the `docs/` folder of the
+/// repository, starting with `docs/overview.md`.
+public enum AriaInfo {
     /// The current version of Aria.
     ///
     /// Aria follows semantic versioning once it reaches `1.0.0`. Until then,
