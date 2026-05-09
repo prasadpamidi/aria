@@ -101,9 +101,12 @@ If `fastlane` is on your PATH (via rbenv or system gems), the `bundle exec` pref
 ### Local tooling setup (one-time)
 
 ```bash
-brew bundle             # installs swiftformat, swiftlint
-bundle install          # installs fastlane (or use system fastlane)
+brew bundle                  # installs swiftformat, swiftlint
+bundle install               # installs fastlane (or use system fastlane)
+./scripts/install-hooks.sh   # enables the pre-commit hook
 ```
+
+The pre-commit hook runs `swiftformat --lint` and `swiftlint --strict` against staged Swift files and blocks the commit if either fails. Bypass with `git commit --no-verify` only when intentional.
 
 ## The platform boundary (CRITICAL)
 

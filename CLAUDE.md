@@ -9,6 +9,14 @@ This file is for Claude Code specifically. The primary AI guidance lives in [AGE
 - **Source of truth:** `docs/`. The protocols and types described in `docs/layers/` are the target architecture.
 - **Independence:** This is a clean-room project. **Do not copy code or documentation from LangChain.js, LangGraph.js, or any other framework.** See [NOTICE.md](NOTICE.md).
 
+## One-time setup
+
+```bash
+brew bundle                   # swiftformat, swiftlint
+bundle install                # fastlane
+./scripts/install-hooks.sh    # pre-commit hook
+```
+
 ## Common commands
 
 ```bash
