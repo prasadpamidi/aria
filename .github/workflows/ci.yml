@@ -75,6 +75,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: List installed Xcodes
+        run: ls /Applications | grep -i xcode || true
+
+      - name: Select latest Xcode
+        run: |
+          # Try the newest Xcode available on the runner; the iOS 26 SDK
+          # is required for FoundationModels. We probe candidates in order
+          # of preference and select the first that exists.
+          for xcode in /Applications/Xcode_26*.app /Applications/Xcode-26*.app /Applications/Xcode_latest.app /Applications/Xcode.app; do
+            if [ -d "$xcode" ]; then
+              sudo xcode-select -s "$xcode/Contents/Developer"
+              echo "Selected: $xcode"
+              xcodebuild -version
+              break
+            fi
+          done
+
       - name: Build AriaSample for iOS Simulator
         run: |
           xcodebuild build \

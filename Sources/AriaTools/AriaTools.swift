@@ -12,6 +12,6 @@ import Aria
 /// - `JSONPathTool`
 /// - `RegexExtractTool`
 public enum AriaTools {
-    /// The current version. Matches `Aria.version` in lockstep.
-    public static let version = Aria.version
+    /// The current version. Matches `AriaInfo.version` in lockstep.
+    public static let version = AriaInfo.version
 }

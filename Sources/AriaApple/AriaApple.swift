@@ -18,8 +18,8 @@
     ///
     /// Implementation is pending. See `docs/architecture.md` for the target design.
     public enum AriaApple {
-        /// The current version. Matches `Aria.version` in lockstep.
-        public static let version = Aria.version
+        /// The current version. Matches `AriaInfo.version` in lockstep.
+        public static let version = AriaInfo.version
     }
 
 #endif

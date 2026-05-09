@@ -8,7 +8,7 @@ import AriaTesting
 @main
 enum AriaCLI {
     static func main() async {
-        print("Aria \(Aria.version)")
+        print("Aria \(AriaInfo.version)")
         print("Composable on-device agent runtime for Apple platforms.")
         print("")
         print("AriaTesting version: \(AriaTesting.version)")

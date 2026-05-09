@@ -2,6 +2,10 @@ import Aria
 import AriaApple
 import SwiftUI
 
+#if canImport(FoundationModels)
+    import FoundationModels
+#endif
+
 // MARK: - ContentView
 
 struct ContentView: View {
@@ -29,7 +33,7 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Aria Sample")
                     .font(.headline)
-                Text("Aria \(Aria.version)  ·  AriaApple \(AriaApple.version)")
+                Text("Aria \(AriaInfo.version)  ·  AriaApple \(AriaApple.version)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -110,48 +114,71 @@ struct ContentView: View {
         self.isStreaming = true
         defer { isStreaming = false }
 
-        // ┌────────────────────────────────────────────────────────────────┐
-        // │ TARGET API — uncomment once Aria & AriaApple are implemented:  │
-        // ├────────────────────────────────────────────────────────────────┤
-        //
-        // let agent = Agent(config: AgentConfig(
-        //     provider: FoundationModelsProvider(model: .systemDefault),
-        //     tools: [],
-        //     systemPrompt: "You are a concise, helpful assistant."
-        // ))
-        //
-        // var assistantText = ""
-        // transcript.append(.assistant(""))
-        //
-        // do {
-        //     for try await event in agent.stream(.message(.user(trimmed)), options: .init()) {
-        //         switch event {
-        //         case .textDelta(let chunk):
-        //             assistantText += chunk
-        //             if var last = transcript.last, last.role == .assistant {
-        //                 last.content = assistantText
-        //                 transcript[transcript.count - 1] = last
-        //             }
-        //         case .toolCallRequested(let call):
-        //             _ = call    // surface a tool badge — exercise for the reader
-        //         case .finish:
-        //             return
-        //         case .error(let err):
-        //             transcript.append(.assistant("Error: \(err)"))
-        //             return
-        //         default:
-        //             break
-        //         }
-        //     }
-        // } catch {
-        //     transcript.append(.assistant("Error: \(error.localizedDescription)"))
-        // }
-        //
-        // └────────────────────────────────────────────────────────────────┘
+        // Conversation history seen so far, plus the new user message.
+        // PR 2 sends only single-turn history — multi-turn arrives with the
+        // agent loop in PR 3. The mapping below preserves prior turns so the
+        // model has context.
+        let history = self.transcript.map { item in
+            switch item.role {
+            case .user: Message.user(item.content)
+            case .assistant: Message.assistant(item.content)
+            }
+        }
+        let messages: [Message] =
+            [.system("You are a concise, helpful assistant.")] + history
 
-        // Placeholder behavior until implementation lands:
-        try? await Task.sleep(for: .milliseconds(400))
-        self.transcript.append(.assistant("(Aria \(Aria.version) — implementation pending. Echo: \(trimmed))"))
+        self.transcript.append(.assistant(""))
+        await self.streamFromProvider(messages: messages)
+    }
+
+    @MainActor
+    private func streamFromProvider(messages: [Message]) async {
+        #if canImport(FoundationModels)
+            if #available(iOS 26.0, macOS 26.0, *) {
+                await self.streamWithFoundationModels(messages: messages)
+                return
+            }
+        #endif
+        self.updateLastAssistant(
+            text: "FoundationModels requires iOS 26 or macOS 26."
+        )
+    }
+
+    #if canImport(FoundationModels)
+        @available(iOS 26.0, macOS 26.0, *)
+        @MainActor
+        private func streamWithFoundationModels(messages: [Message]) async {
+            let provider = FoundationModelsProvider()
+            var assistantText = ""
+            do {
+                for try await event in provider.stream(
+                    messages: messages,
+                    tools: [],
+                    options: .init()
+                ) {
+                    switch event {
+                    case let .textDelta(chunk):
+                        assistantText += chunk
+                        self.updateLastAssistant(text: assistantText)
+                    case .messageStop:
+                        return
+                    default:
+                        break
+                    }
+                }
+            } catch {
+                self.updateLastAssistant(text: "Error: \(error)")
+            }
+        }
+    #endif
+
+    @MainActor
+    private func updateLastAssistant(text: String) {
+        guard let lastIndex = transcript.indices.last,
+              transcript[lastIndex].role == .assistant else {
+            return
+        }
+        self.transcript[lastIndex].content = text
     }
 }
 
