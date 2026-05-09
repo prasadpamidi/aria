@@ -35,25 +35,18 @@
             tools _: [ToolDefinition],
             options _: Aria.GenerationOptions
         ) -> AsyncThrowingStream<ProviderEvent, any Error> {
-            AsyncThrowingStream { continuation in
-                let task = Task {
-                    do {
-                        try await self.run(messages: messages, continuation: continuation)
-                    } catch is CancellationError {
-                        continuation.finish(throwing: AgentError.cancelled)
-                    } catch let error as AgentError {
-                        continuation.finish(throwing: error)
-                    } catch {
-                        continuation.finish(
-                            throwing: AgentError.providerFailed(
-                                "FoundationModels stream failed",
-                                underlying: ErrorBox(error)
-                            )
-                        )
-                    }
-                }
-                continuation.onTermination = { _ in task.cancel() }
-            }
+            // No `AnyTool`s available on this overload — the agent layer
+            // calls `stream(messages:executableTools:options:)` instead
+            // when tools should be executed. This path runs text-only.
+            self.streamCore(messages: messages, executableTools: [])
+        }
+
+        public func stream(
+            messages: [Message],
+            executableTools: [AnyTool],
+            options _: Aria.GenerationOptions
+        ) -> AsyncThrowingStream<ProviderEvent, any Error> {
+            self.streamCore(messages: messages, executableTools: executableTools)
         }
 
         // MARK: Internal
@@ -119,8 +112,61 @@
             }
         }
 
+        private static func buildBridgeTools(
+            from executableTools: [AnyTool],
+            continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation
+        ) throws -> [any FoundationModels.Tool] {
+            try executableTools.map { ariaTool in
+                try AriaBridgeTool(ariaTool: ariaTool) { event in
+                    continuation.yield(event)
+                }
+            }
+        }
+
+        private func streamCore(
+            messages: [Message],
+            executableTools: [AnyTool]
+        ) -> AsyncThrowingStream<ProviderEvent, any Error> {
+            AsyncThrowingStream { continuation in
+                let task = Task {
+                    await self.runHandlingErrors(
+                        messages: messages,
+                        executableTools: executableTools,
+                        continuation: continuation
+                    )
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
+        }
+
+        private func runHandlingErrors(
+            messages: [Message],
+            executableTools: [AnyTool],
+            continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation
+        ) async {
+            do {
+                try await self.run(
+                    messages: messages,
+                    executableTools: executableTools,
+                    continuation: continuation
+                )
+            } catch is CancellationError {
+                continuation.finish(throwing: AgentError.cancelled)
+            } catch let error as AgentError {
+                continuation.finish(throwing: error)
+            } catch {
+                continuation.finish(
+                    throwing: AgentError.providerFailed(
+                        "FoundationModels stream failed",
+                        underlying: ErrorBox(error)
+                    )
+                )
+            }
+        }
+
         private func run(
             messages: [Message],
+            executableTools: [AnyTool],
             continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation
         ) async throws {
             try Self.checkAvailability()
@@ -136,7 +182,14 @@
                 )
             }
 
-            let session = LanguageModelSession(instructions: instructions)
+            let bridgeTools = try Self.buildBridgeTools(
+                from: executableTools,
+                continuation: continuation
+            )
+            let session = LanguageModelSession(
+                tools: bridgeTools,
+                instructions: instructions
+            )
 
             let messageId = UUID().uuidString
             continuation.yield(.messageStart(messageId: messageId))
@@ -169,13 +222,15 @@
 
     @available(iOS 26.0, macOS 26.0, *)
     extension ProviderCapabilities {
-        /// Default capabilities for `FoundationModelsProvider`. Tool support
-        /// is `false` until PR 3 wires the agent loop and JSONSchema↔
-        /// Generable bridge.
+        /// Default capabilities for `FoundationModelsProvider`.
+        /// Tool support resolves inside the model session via the
+        /// `AriaBridgeTool` adapter; the provider emits
+        /// `ProviderEvent.toolCallExecuted` once each tool returns so the
+        /// agent layer surfaces equivalent events to consumers.
         public static let foundationModelsDefault = ProviderCapabilities(
             modelIdentifier: "apple.foundationmodels.default",
             supportsStreaming: true,
-            supportsToolUse: false,
+            supportsToolUse: true,
             supportsParallelToolCalls: false,
             supportsVision: false,
             supportsAudio: false,

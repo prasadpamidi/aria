@@ -99,9 +99,9 @@
             let provider = FoundationModelsProvider()
             XCTAssertTrue(provider.capabilities.supportsStreaming)
             XCTAssertTrue(provider.capabilities.supportsSystemPrompt)
-            XCTAssertFalse(
+            XCTAssertTrue(
                 provider.capabilities.supportsToolUse,
-                "Tool support is deferred to PR 3"
+                "PR 4 enabled tool use via the AriaBridgeTool adapter"
             )
             XCTAssertEqual(
                 provider.capabilities.modelIdentifier,
