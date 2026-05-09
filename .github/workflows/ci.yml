@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs on the same branch when a new commit lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ------------------------------------------------------------------
+  # Linux — enforces the platform boundary.
+  # If anyone leaks an Apple framework into `Aria`, this job breaks.
+  # ------------------------------------------------------------------
+  linux-core:
+    name: Linux — Core Build & Test
+    runs-on: ubuntu-latest
+    container:
+      image: swift:5.10-jammy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Build core target
+        run: swift build --target Aria
+
+      - name: Build testing target
+        run: swift build --target AriaTesting
+
+      - name: Build tools target
+        run: swift build --target AriaTools
+
+      - name: Run core tests
+        run: swift test --filter AriaTests
+
+  # ------------------------------------------------------------------
+  # macOS — full build & test of every target including AriaApple.
+  # ------------------------------------------------------------------
+  macos:
+    name: macOS — Full Build & Test
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build all targets
+        run: swift build
+
+      - name: Run all tests
+        run: swift test
+
+      - name: Run CLI demo
+        run: swift run AriaCLI
+
+  # ------------------------------------------------------------------
+  # iOS — smoke build for the simulator.
+  # Confirms the package compiles for iOS even though most tests run
+  # in the macOS job above.
+  # ------------------------------------------------------------------
+  ios-smoke:
+    name: iOS — Simulator Smoke Build
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build for iOS Simulator
+        run: |
+          xcodebuild build \
+            -scheme Aria \
+            -destination 'generic/platform=iOS Simulator' \
+            -skipPackagePluginValidation \
+            -quiet
