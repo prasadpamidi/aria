@@ -106,3 +106,9 @@
 --disable wrapEnumCases
 --disable wrapSwitchCases
 --disable acronyms
+# Test methods commonly use `async throws` even when bodies don't yet
+# await/throw — preserving that signature lets tests evolve without a
+# format cascade. Disable these two rules so they don't fire on @Test or
+# XCTest methods.
+--disable redundantAsync
+--disable redundantThrows
