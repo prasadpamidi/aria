@@ -86,9 +86,17 @@ swift run AriaCLI                          # run the CLI demo
 open Examples/SampleApp/AriaSample.xcodeproj
 ```
 
+### Local setup (one-time)
+
+```bash
+brew bundle                   # swiftformat, swiftlint
+bundle install                # fastlane
+./scripts/install-hooks.sh    # pre-commit hook (lint + format gate)
+```
+
 ### Fastlane
 
-Routine work goes through Fastlane lanes. Set up with `brew bundle && bundle install`, then:
+Routine work goes through Fastlane lanes:
 
 ```bash
 bundle exec fastlane package_tests       # swift test

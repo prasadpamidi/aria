@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+#
+# Aria pre-commit hook
+#
+# Runs SwiftFormat and SwiftLint against staged Swift files. Blocks the
+# commit if either reports issues. Skipped if the tools are not installed.
+#
+# Install (once per clone):
+#   ./scripts/install-hooks.sh
+#
+# Bypass (discouraged):
+#   git commit --no-verify
+
+set -e
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+# Collect staged Swift files (added, copied, modified, renamed)
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR | grep '\.swift$' || true)
+
+if [ -z "$STAGED" ]; then
+    exit 0
+fi
+
+red()    { printf "\033[31m%s\033[0m\n" "$1"; }
+yellow() { printf "\033[33m%s\033[0m\n" "$1"; }
+green()  { printf "\033[32m%s\033[0m\n" "$1"; }
+
+ISSUES=0
+
+# ----- SwiftFormat -----
+if command -v swiftformat >/dev/null 2>&1; then
+    echo "→ swiftformat --lint (staged Swift files)"
+    if ! swiftformat $STAGED --config .swiftformat --lint --quiet; then
+        ISSUES=1
+        echo ""
+        red   "✗ SwiftFormat found formatting issues."
+        echo  "  Fix with:  bundle exec fastlane format"
+        echo  "  Or:        swiftformat \$(git diff --cached --name-only --diff-filter=ACMR | grep '\.swift\$') --config .swiftformat"
+        echo ""
+    fi
+else
+    yellow "warning: swiftformat not installed; skipping format check."
+    yellow "         install via 'brew bundle' or 'brew install swiftformat'"
+fi
+
+# ----- SwiftLint -----
+if command -v swiftlint >/dev/null 2>&1; then
+    echo "→ swiftlint (staged Swift files, strict)"
+    if ! swiftlint lint $STAGED --config .swiftlint.yml --strict --quiet; then
+        ISSUES=1
+        echo ""
+        red   "✗ SwiftLint found violations."
+        echo  "  Auto-fix:  bundle exec fastlane lint fix:true"
+        echo  "  Then review and fix any remaining violations manually."
+        echo ""
+    fi
+else
+    yellow "warning: swiftlint not installed; skipping lint check."
+    yellow "         install via 'brew bundle' or 'brew install swiftlint'"
+fi
+
+if [ "$ISSUES" -ne 0 ]; then
+    red "✗ Pre-commit checks failed. Commit blocked."
+    echo "  To bypass (NOT recommended): git commit --no-verify"
+    exit 1
+fi
+
+green "✓ Pre-commit checks passed."
