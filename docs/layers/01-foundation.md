@@ -34,7 +34,7 @@ public struct Message: Codable, Sendable, Equatable {
 
     public let role: Role
     public let content: [ContentPart]
-    public let toolCalls: [ToolCall]?       // assistant messages may include tool calls
+    public let toolCalls: [ToolCall]        // empty unless the assistant requested tool calls
     public let toolCallId: String?          // tool messages reference the call they answer
     public let metadata: [String: JSONValue]
     public let createdAt: Date
@@ -242,33 +242,31 @@ public struct RunOptions: Sendable {
     public var parentRunId: UUID?
     public var tags: [String]
     public var metadata: [String: JSONValue]
-    public var observers: [any Observer]
     public var deadline: ContinuousClock.Instant?
-    public var cancellation: CancellationToken?
 
     public init(...)
+
+    /// Throws `AgentError.cancelled` or `AgentError.timeout` if the
+    /// current Task has been cancelled or the deadline has passed.
+    public func checkpoint() throws
 }
 ```
 
 **Design notes:**
 
 - `runId` is generated automatically; `parentRunId` lets you trace nested runs.
-- `observers` are passed by reference (existential), allowing external systems to attach.
-- `deadline` is a deadline, not a duration — composable through `pipe`.
+- `deadline` is an absolute instant (composable through `pipe`); the convenience `checkpoint()` method makes deadline-aware async loops a one-line affair.
+- `observers` will be added in a later PR alongside the Runnable layer.
 
-### `CancellationToken`
+### Cancellation: rely on `Task.isCancelled`
 
-A simple cooperative cancellation token. (Swift's `Task.isCancelled` works for the common case; this is for cases where you need to share cancellation across multiple tasks.)
+Aria does not ship a separate `CancellationToken`. Cancellation flows through Swift Concurrency's structured cancellation model:
 
-```swift
-public final class CancellationToken: @unchecked Sendable {
-    public var isCancelled: Bool { get }
-    public func cancel()
-    public func onCancel(_ handler: @Sendable @escaping () -> Void)
-}
-```
+- `Task.cancel()` propagates to all child tasks.
+- Long-running operations check `Task.isCancelled` between iterations.
+- `RunOptions.deadline` is checked via `RunOptions.checkpoint()`, which throws `AgentError.cancelled` or `AgentError.timeout` as appropriate.
 
-`@unchecked Sendable` because it uses internal locking; this is the one place we pay that cost intentionally.
+If a future need emerges for cross-task cancellation that structured concurrency cannot express, a `CancellationToken` can be added then. Until then, the simpler primitive is sufficient.
 
 ## What this layer does NOT include
 
