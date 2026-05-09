@@ -104,16 +104,16 @@ extension MockLLMProvider {
         // MARK: Internal
 
         var scenes: [Scene] {
-            get { self.lock.withLock { self._scenes } }
-            set { self.lock.withLock { self._scenes = newValue } }
+            get { self.locked { self._scenes } }
+            set { self.locked { self._scenes = newValue } }
         }
 
         var remaining: Int {
-            self.lock.withLock { self._scenes.count }
+            self.locked { self._scenes.count }
         }
 
         func consumeNextScene() -> Scene? {
-            self.lock.withLock {
+            self.locked {
                 guard !self._scenes.isEmpty else {
                     return nil
                 }
@@ -122,15 +122,15 @@ extension MockLLMProvider {
         }
 
         func recordInvocation(_ invocation: Invocation) {
-            self.lock.withLock { self._invocations.append(invocation) }
+            self.locked { self._invocations.append(invocation) }
         }
 
         func enqueue(_ scene: Scene) {
-            self.lock.withLock { self._scenes.append(scene) }
+            self.locked { self._scenes.append(scene) }
         }
 
         func snapshot() -> [Invocation] {
-            self.lock.withLock { self._invocations }
+            self.locked { self._invocations }
         }
 
         // MARK: Private
@@ -138,6 +138,15 @@ extension MockLLMProvider {
         private let lock = NSLock()
         private var _scenes: [Scene] = []
         private var _invocations: [Invocation] = []
+
+        /// Cross-platform lock helper. `NSLock.withLock` is not available
+        /// on swift-corelibs-foundation (Linux), so we use the manual
+        /// lock/unlock idiom here instead.
+        private func locked<T>(_ block: () throws -> T) rethrows -> T {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return try block()
+        }
     }
 }
 
