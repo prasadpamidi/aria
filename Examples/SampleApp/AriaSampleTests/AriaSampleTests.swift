@@ -6,11 +6,11 @@ import Testing
 struct AriaSampleTests {
     @Test
     func ariaVersionIsAvailable() async throws {
-        #expect(!Aria.version.isEmpty)
+        #expect(!AriaInfo.version.isEmpty)
     }
 
     @Test
     func ariaTestingVersionMatchesCore() async throws {
-        #expect(Aria.version == AriaTesting.version)
+        #expect(AriaInfo.version == AriaTesting.version)
     }
 }

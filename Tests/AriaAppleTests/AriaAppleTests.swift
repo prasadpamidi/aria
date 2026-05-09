@@ -11,9 +11,9 @@
     final class AriaAppleTests: XCTestCase {
         func testAriaAppleVersionMatchesCore() {
             XCTAssertEqual(
-                Aria.version,
+                AriaInfo.version,
                 AriaApple.version,
-                "AriaApple.version must track Aria.version exactly"
+                "AriaApple.version must track AriaInfo.version exactly"
             )
         }
     }
