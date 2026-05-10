@@ -17,6 +17,7 @@
             .qwen25Instruct4bit,
             .gemma2Instruct4bit,
             .llama32Instruct4bit,
+            .qwen25VL3BInstruct4bit,
         ]
 
         /// Look up a curated entry by Hugging Face id.
@@ -63,6 +64,21 @@
             contextWindow: 8192,
             supportsTools: true,
             recommendedRAMGigabytes: 4
+        )
+
+        /// Qwen 2.5 VL 3B Instruct, 4-bit quantization. Vision +
+        /// language model — accepts image inputs alongside text.
+        /// Pre-registered in `MLXVLM.VLMRegistry`.
+        public static let qwen25VL3BInstruct4bit = MLXModelCapabilities(
+            id: "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
+            displayName: "Qwen 2.5 VL 3B Instruct (4-bit)",
+            family: "qwen2.5-vl",
+            kind: .vision,
+            approximateDiskBytes: 2_400_000_000, // ~2.2 GiB
+            contextWindow: 32768,
+            supportsTools: false,
+            supportsVision: true,
+            recommendedRAMGigabytes: 6
         )
     }
 #endif

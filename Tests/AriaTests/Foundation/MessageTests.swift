@@ -22,6 +22,27 @@ final class MessageTests: XCTestCase {
         XCTAssertEqual(tool.textContent, "result")
     }
 
+    func testUserWithImagesAttachesImageContentParts() throws {
+        let imageData = Data([0x01, 0x02, 0x03])
+        let image = ImageContent(source: .data(imageData, mimeType: "image/jpeg"))
+        let message = Message.user("describe this", images: [image])
+        XCTAssertEqual(message.role, .user)
+        XCTAssertEqual(message.content.count, 2)
+        // Text part still composes via textContent so text-only
+        // providers see only the prompt.
+        XCTAssertEqual(message.textContent, "describe this")
+        guard case let .image(attached) = message.content.last else {
+            XCTFail("Expected trailing image content part")
+            return
+        }
+        guard case let .data(roundTrip, mimeType) = attached.source else {
+            XCTFail("Expected image source to round-trip as .data")
+            return
+        }
+        XCTAssertEqual(roundTrip, imageData)
+        XCTAssertEqual(mimeType, "image/jpeg")
+    }
+
     func testTextContentConcatenatesTextPartsOnly() {
         let message = Message(
             role: .assistant,
