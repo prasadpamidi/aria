@@ -52,6 +52,16 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            #if canImport(FoundationModels)
+                if #available(iOS 26.0, macOS 26.0, *) {
+                    Button("Probe") {
+                        Task { await self.runProbe() }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .disabled(self.isStreaming)
+                }
+            #endif
         }
         .padding(.horizontal)
         .padding(.vertical, 12)
@@ -279,6 +289,41 @@ struct ContentView: View {
         self.transcript[lastIndex].content = text
     }
 }
+
+// MARK: - Probe
+
+#if canImport(FoundationModels)
+    extension ContentView {
+        /// Run the FoundationModels tool-routing probe and surface the
+        /// result as an inline assistant message. Used to determine
+        /// whether the model invokes our `AriaBridgeTool`
+        /// (DynamicGenerationSchema), the WWDC-style native
+        /// `@Generable` tool, or neither.
+        @available(iOS 26.0, macOS 26.0, *)
+        @MainActor
+        func runProbe() async {
+            self.isStreaming = true
+            defer { isStreaming = false }
+            self.transcript.append(.assistant("[Probe] running…"))
+            do {
+                let result = try await FoundationModelsToolProbe.run(
+                    prompt: "What time is it right now?"
+                )
+                let summary = """
+                [Probe result]
+                native @Generable fired: \(result.nativeFired)
+                AriaBridgeTool fired:    \(result.bridgeFired)
+
+                Model response:
+                \(result.response)
+                """
+                self.updateLastAssistant(text: summary)
+            } catch {
+                self.updateLastAssistant(text: "[Probe error] \(error)")
+            }
+        }
+    }
+#endif
 
 // MARK: - TranscriptItem
 
