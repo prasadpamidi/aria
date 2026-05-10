@@ -7,8 +7,14 @@ import FoundationModels
 /// State threaded through the haiku-chain `StateGraph` demo. Each node
 /// fills in the next field by making an on-device FoundationModels
 /// call.
+///
+/// `nonisolated` opts out of AriaSample's MainActor-by-default
+/// isolation so the synthesized `Codable` + `Sendable` conformances
+/// can satisfy `StateGraph<State: Sendable & Codable>`. Without it,
+/// the conformances become MainActor-isolated and the generic
+/// constraint rejects them.
 @available(iOS 26.0, macOS 26.0, *)
-struct HaikuChainState: Codable {
+nonisolated struct HaikuChainState: Codable {
     var topic: String?
     var haiku: String?
     var critique: String?
