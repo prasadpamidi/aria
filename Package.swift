@@ -21,9 +21,14 @@ let package = Package(
         // Mocks, fixtures, and test helpers. Cross-platform.
         .library(name: "AriaTesting", targets: ["AriaTesting"]),
 
-        // Apple-platform implementations: FoundationModels, MLX, Core ML,
-        // NLEmbedding, SwiftData, sqlite-vec, OSLog backends.
+        // Apple system-framework implementations: FoundationModels,
+        // NLEmbedding, GRDB-backed memory, OSLog. Lighter than `AriaMLX`.
         .library(name: "AriaApple", targets: ["AriaApple"]),
+
+        // MLX-backed LLMProvider + model download/disk management.
+        // Separate target because `mlx-swift-lm` is heavyweight; consumers
+        // who only want FoundationModels shouldn't pay the size/build cost.
+        .library(name: "AriaMLX", targets: ["AriaMLX"]),
 
         // Cross-platform tool implementations.
         .library(name: "AriaTools", targets: ["AriaTools"]),
@@ -40,6 +45,16 @@ let package = Package(
         // Persistent memory (chat history + checkpointer) for AriaApple.
         // Apple-only — `Aria` core never imports it.
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.10.0"),
+        // MLX on-device LLM runtime + model download. Apple-Silicon-only.
+        // Lives behind the `AriaMLX` target so non-MLX consumers don't
+        // resolve it. `mlx-swift-lm` 3.x split out the LM libraries and
+        // requires consumers to wire up an external downloader +
+        // tokenizer loader; we use DePasqualeOrg's adapter packages
+        // (swift-huggingface-mlx for the HF Hub downloader,
+        // swift-transformers-mlx for tokenizer loading).
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", from: "3.31.3"),
+        .package(url: "https://github.com/DePasqualeOrg/swift-huggingface-mlx.git", from: "0.2.0"),
+        .package(url: "https://github.com/DePasqualeOrg/swift-transformers-mlx.git", branch: "main"),
     ],
     targets: [
         // MARK: - Library targets
@@ -71,6 +86,18 @@ let package = Package(
         ),
 
         .target(
+            name: "AriaMLX",
+            dependencies: [
+                "Aria",
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "MLXLMHuggingFace", package: "swift-huggingface-mlx"),
+                .product(name: "MLXLMTransformers", package: "swift-transformers-mlx"),
+            ],
+            path: "Sources/AriaMLX"
+        ),
+
+        .target(
             name: "AriaTools",
             dependencies: ["Aria"],
             path: "Sources/AriaTools"
@@ -88,6 +115,12 @@ let package = Package(
             name: "AriaAppleTests",
             dependencies: ["Aria", "AriaApple", "AriaTesting"],
             path: "Tests/AriaAppleTests"
+        ),
+
+        .testTarget(
+            name: "AriaMLXTests",
+            dependencies: ["Aria", "AriaMLX", "AriaTesting"],
+            path: "Tests/AriaMLXTests"
         ),
 
         // MARK: - Examples

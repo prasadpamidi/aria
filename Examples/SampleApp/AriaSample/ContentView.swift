@@ -30,6 +30,9 @@ struct ContentView: View {
         .sheet(isPresented: self.$memoriesSheetShown) {
             MemoriesSheet(storage: self.storage, namespace: Self.memoryNamespace)
         }
+        .sheet(isPresented: self.$mlxModelsSheetShown) {
+            MLXModelsSheet()
+        }
         .sheet(item: self.$shareItem) { item in
             ShareSheet(items: [item.url])
         }
@@ -48,6 +51,7 @@ struct ContentView: View {
     /// injected before the model's reply.
     @State private var memoryProbe = MemoryProbe()
     @State private var memoriesSheetShown = false
+    @State private var mlxModelsSheetShown = false
     /// Single recorder threaded into both the chat agent and the
     /// state-graph demo so a single "Share session" tap exports a
     /// bundle covering everything that ran in this session.
@@ -79,6 +83,7 @@ struct ContentView: View {
     private var actionsMenu: some View {
         Menu {
             Button("Memories…") { self.memoriesSheetShown = true }
+            Button("MLX models…") { self.mlxModelsSheetShown = true }
             Button("Share session…") { Task { await self.exportSession() } }
             Button("Clear chat", role: .destructive) {
                 Task { await self.clearHistory() }
