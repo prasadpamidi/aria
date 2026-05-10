@@ -1,19 +1,25 @@
 import Aria
+import AriaApple
 import Foundation
+import FoundationModels
 
 // MARK: - CurrentTimeTool
 
 /// A trivial tool the agent can call to fetch the current time.
 ///
-/// Demonstrates the end-to-end agent + tool flow:
+/// Demonstrates the end-to-end agent + tool flow on FoundationModels:
 /// 1. The model decides to call `current_time` based on the user prompt.
-/// 2. `FoundationModelsProvider`'s `AriaBridgeTool` adapter dispatches
-///    to this `Tool.call` implementation.
-/// 3. The result is fed back into the model session, and the model
+/// 2. `FoundationModelsProvider`'s `TypedAriaBridgeTool` adapter
+///    dispatches to this `Tool.call` implementation — possible because
+///    `Input` is `@Generable`, which is what the iOS 26 system model's
+///    tool router actually resolves against.
+/// 3. The result is fed back into the session and the model
 ///    incorporates the time into its reply.
-struct CurrentTimeTool: Tool {
+struct CurrentTimeTool: GenerableTool {
+    @Generable
     struct Input: Codable {
-        let timezone: String?
+        @Guide(description: "IANA timezone identifier (e.g. \"America/Los_Angeles\")")
+        var timezone: String?
     }
 
     struct Output: Codable {
@@ -33,7 +39,7 @@ struct CurrentTimeTool: Tool {
             properties: [
                 "timezone": .string(
                     description: "IANA timezone identifier"
-                )
+                ),
             ],
             required: []
         )

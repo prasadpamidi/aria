@@ -1,5 +1,7 @@
 import Aria
+import AriaApple
 import Foundation
+import FoundationModels
 
 // MARK: - RememberTool
 
@@ -12,11 +14,14 @@ import Foundation
 /// 3. On a future turn, `RAGMiddleware` retrieves the stored fact and
 ///    injects it as context before the next provider call.
 ///
-/// Because `MemoryStore` is `Sendable`, the tool can hold one and
-/// dispatch concurrently from inside the agent loop.
-struct RememberTool: Tool {
+/// Conforms to `GenerableTool` so it routes through
+/// `TypedAriaBridgeTool` — the only path FoundationModels' iOS 26 tool
+/// router actually invokes.
+struct RememberTool: GenerableTool {
+    @Generable
     struct Input: Codable {
-        let fact: String
+        @Guide(description: "A concise statement of the fact to remember.")
+        var fact: String
     }
 
     struct Output: Codable {
