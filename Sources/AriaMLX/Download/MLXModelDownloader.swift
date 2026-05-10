@@ -51,11 +51,31 @@
     public struct MLXModelDownloader: Sendable {
         // MARK: Lifecycle
 
-        public init(hubClient: HubClient = HubClient()) {
+        public init(hubClient: HubClient = MLXModelDownloader.defaultHubClient()) {
             self.hubClient = hubClient
         }
 
         // MARK: Public
+
+        /// Default on-disk root for downloaded models:
+        /// `Documents/huggingface/hub/`. We pin this rather than letting
+        /// `HubClient` fall back to its default `Library/Caches/...`
+        /// because iOS evicts `Caches` under storage pressure and a
+        /// multi-GB redownload is the kind of surprise users notice.
+        /// `MLXModelDiskManager` reads from the same root.
+        public static func defaultCacheDirectory() -> URL {
+            let documents = FileManager.default
+                .urls(for: .documentDirectory, in: .userDomainMask).first
+                ?? URL(fileURLWithPath: NSTemporaryDirectory())
+            return documents
+                .appendingPathComponent("huggingface", isDirectory: true)
+                .appendingPathComponent("hub", isDirectory: true)
+        }
+
+        /// `HubClient` configured with `defaultCacheDirectory()`.
+        public static func defaultHubClient() -> HubClient {
+            HubClient(cache: HubCache(cacheDirectory: self.defaultCacheDirectory()))
+        }
 
         /// Download (or verify already-cached) a model and return its
         /// loaded `ModelContainer`. The async stream surfaces progress
