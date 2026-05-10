@@ -22,7 +22,15 @@ final class AppState {
         /// downloader + disk manager + active-model selection.
         /// Drive the chat agent through `manager.makeProvider()`
         /// and present the SDK's `MLXModelsView` against it.
-        let modelManager = MLXModelManager()
+        ///
+        /// `persistenceKey` makes the manager mirror the active
+        /// model into `UserDefaults`, so the next launch restores
+        /// the user's last pick (and silently falls back to
+        /// FoundationModels if the model has been removed from
+        /// disk since).
+        let modelManager = MLXModelManager(
+            persistenceKey: "aria.sample.mlx.activeModelID"
+        )
     #endif
 
     init() {}
