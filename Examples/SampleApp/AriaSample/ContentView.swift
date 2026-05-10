@@ -230,15 +230,20 @@ struct ContentView: View {
         }
 
         private static func systemPrompt(memoryEnabled: Bool) -> String {
+            // Keep this prompt about *behavior*, not tool routing. Naming
+            // tools in the prompt nudges the model to mimic that text
+            // pattern in its replies; the tool descriptions registered
+            // with the session already tell the model what each tool
+            // does and when to use it.
             var lines: [String] = [
                 "You are a concise, helpful assistant.",
-                "When the user asks about the current time or date, call the current_time tool.",
+                "Always use the tools you have access to when they are relevant — "
+                    + "never describe a tool call in your reply text.",
             ]
             if memoryEnabled {
                 lines.append(
-                    "When the user shares a durable preference, biographical fact, or "
-                        + "anything they will want you to remember in the future, call the "
-                        + "remember_fact tool with a single concise sentence."
+                    "Save anything the user wants you to remember about themselves "
+                        + "for future conversations."
                 )
             }
             return lines.joined(separator: " ")
