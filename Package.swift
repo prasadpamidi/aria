@@ -100,6 +100,11 @@ let package = Package(
                     condition: .when(platforms: [.iOS, .macOS, .visionOS])
                 ),
                 .product(
+                    name: "MLXVLM",
+                    package: "mlx-swift-lm",
+                    condition: .when(platforms: [.iOS, .macOS, .visionOS])
+                ),
+                .product(
                     name: "MLXLMCommon",
                     package: "mlx-swift-lm",
                     condition: .when(platforms: [.iOS, .macOS, .visionOS])

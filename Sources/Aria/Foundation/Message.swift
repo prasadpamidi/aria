@@ -54,6 +54,24 @@ extension Message {
         Message(role: .user, content: [.text(text)], metadata: metadata)
     }
 
+    /// Build a user message with one or more images attached. Each
+    /// image is appended as a `ContentPart.image(...)` after the
+    /// text part. Vision-capable providers (FoundationModels with
+    /// vision, MLX VLM models) consume them; text-only providers
+    /// drop them silently via `textContent` (which only joins
+    /// `.text` parts).
+    public static func user(
+        _ text: String,
+        images: [ImageContent],
+        metadata: [String: JSONValue] = [:]
+    ) -> Message {
+        var content: [ContentPart] = [.text(text)]
+        for image in images {
+            content.append(.image(image))
+        }
+        return Message(role: .user, content: content, metadata: metadata)
+    }
+
     public static func assistant(
         _ text: String,
         toolCalls: [ToolCall] = [],

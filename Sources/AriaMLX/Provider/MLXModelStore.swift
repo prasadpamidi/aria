@@ -27,6 +27,7 @@
         /// await the same task.
         public func container(
             for id: String,
+            kind: MLXModelKind = .textOnly,
             revision: String = "main",
             onProgress: @Sendable @escaping (MLXDownloadProgress) -> Void = { _ in }
         ) async throws -> ModelContainer {
@@ -39,6 +40,7 @@
             let task = Task {
                 try await self.downloader.loadContainer(
                     id: id,
+                    kind: kind,
                     revision: revision,
                     useLatest: false,
                     onProgress: onProgress

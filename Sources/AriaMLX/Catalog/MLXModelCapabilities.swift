@@ -12,6 +12,14 @@
     /// 2. Runtime detection via `ChatTemplateInspector` for user-added
     ///    models — chat-template Jinja inspection plus
     ///    `config.json` / `model_type` fallbacks.
+    /// Whether a model is text-only or vision-capable. Used by the
+    /// downloader and provider to pick `LLMModelFactory` vs
+    /// `VLMModelFactory` from `mlx-swift-lm`.
+    public enum MLXModelKind: String, Sendable, Codable {
+        case textOnly
+        case vision
+    }
+
     public struct MLXModelCapabilities: Sendable, Hashable, Codable {
         // MARK: Lifecycle
 
@@ -19,6 +27,7 @@
             id: String,
             displayName: String,
             family: String,
+            kind: MLXModelKind = .textOnly,
             approximateDiskBytes: Int64,
             contextWindow: Int,
             supportsTools: Bool,
@@ -28,6 +37,7 @@
             self.id = id
             self.displayName = displayName
             self.family = family
+            self.kind = kind
             self.approximateDiskBytes = approximateDiskBytes
             self.contextWindow = contextWindow
             self.supportsTools = supportsTools
@@ -46,6 +56,10 @@
         /// Model family for capability inference fallbacks
         /// (e.g. "qwen2.5", "llama-3.2", "gemma-2").
         public let family: String
+
+        /// Whether the model expects image inputs alongside text.
+        /// Drives the factory pick (LLM vs VLM) at load time.
+        public let kind: MLXModelKind
 
         /// Rough on-disk size in bytes — used to render download UI
         /// hints. The real size after download may differ; the disk

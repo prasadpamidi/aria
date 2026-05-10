@@ -57,6 +57,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Select latest Xcode
+        run: |
+          # mlx-swift-lm's MLXVLM target uses a global `let context =
+          # CIContext()` that trips Swift 6.0's strict-concurrency
+          # rules in Xcode 16.4 (the macos-15 default). Xcode 26.x
+          # ships Swift 6.1+ which accepts the pattern. Probe in
+          # preference order and select the first that exists.
+          for xcode in /Applications/Xcode_26*.app /Applications/Xcode-26*.app /Applications/Xcode_latest.app /Applications/Xcode.app; do
+            if [ -d "$xcode" ]; then
+              sudo xcode-select -s "$xcode/Contents/Developer"
+              echo "Selected: $xcode"
+              break
+            fi
+          done
+
       - name: Show Swift version
         run: swift --version
 

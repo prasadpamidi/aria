@@ -8,6 +8,18 @@
 
     @available(iOS 26.0, macOS 26.0, *)
     final class FoundationModelsProviderTests: XCTestCase {
+        override func setUpWithError() throws {
+            // OS-version guard. XCTest's Obj-C-driven discovery
+            // doesn't honor Swift's `@available` annotation on the
+            // class, so when a CI host is older than the
+            // FoundationModels minimum (e.g. macos-15 runners with
+            // Xcode 26's macOS 26 SDK), test methods get invoked
+            // anyway and crash on first FM API touch.
+            guard #available(iOS 26.0, macOS 26.0, *) else {
+                throw XCTSkip("Requires iOS 26 / macOS 26 runtime")
+            }
+        }
+
         // MARK: - Prompt extraction
 
         func testExtractPromptUsesLastMessageText() throws {

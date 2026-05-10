@@ -17,6 +17,9 @@
             .qwen25Instruct4bit,
             .gemma2Instruct4bit,
             .llama32Instruct4bit,
+            .qwen25VL3BInstruct4bit,
+            .gemma4E2BInstruct4bit,
+            .gemma4E4BInstruct4bit,
         ]
 
         /// Look up a curated entry by Hugging Face id.
@@ -63,6 +66,52 @@
             contextWindow: 8192,
             supportsTools: true,
             recommendedRAMGigabytes: 4
+        )
+
+        /// Qwen 2.5 VL 3B Instruct, 4-bit quantization. Vision +
+        /// language model — accepts image inputs alongside text.
+        /// Pre-registered in `MLXVLM.VLMRegistry`.
+        public static let qwen25VL3BInstruct4bit = MLXModelCapabilities(
+            id: "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
+            displayName: "Qwen 2.5 VL 3B Instruct (4-bit)",
+            family: "qwen2.5-vl",
+            kind: .vision,
+            approximateDiskBytes: 2_400_000_000, // ~2.2 GiB
+            contextWindow: 32768,
+            supportsTools: false,
+            supportsVision: true,
+            recommendedRAMGigabytes: 6
+        )
+
+        /// Google Gemma 4 e2b Instruct, 4-bit quantization. Smallest
+        /// of the Gemma 4 family — 1B effective params, vision +
+        /// language. Pre-registered as `gemma4_E2B_it_4bit` in
+        /// `MLXVLM.VLMRegistry`. Apache 2.0.
+        public static let gemma4E2BInstruct4bit = MLXModelCapabilities(
+            id: "mlx-community/gemma-4-e2b-it-4bit",
+            displayName: "Gemma 4 e2b Instruct (4-bit)",
+            family: "gemma-4",
+            kind: .vision,
+            approximateDiskBytes: 3_600_000_000, // ~3.58 GiB on disk
+            contextWindow: 8192,
+            supportsTools: false,
+            supportsVision: true,
+            recommendedRAMGigabytes: 6
+        )
+
+        /// Google Gemma 4 e4b Instruct, 4-bit quantization. 2B
+        /// effective params, vision + language. Recommend
+        /// A17 Pro / A18 / M-series for usable inference speed.
+        public static let gemma4E4BInstruct4bit = MLXModelCapabilities(
+            id: "mlx-community/gemma-4-e4b-it-4bit",
+            displayName: "Gemma 4 e4b Instruct (4-bit)",
+            family: "gemma-4",
+            kind: .vision,
+            approximateDiskBytes: 5_300_000_000, // ~5.22 GiB on disk
+            contextWindow: 8192,
+            supportsTools: false,
+            supportsVision: true,
+            recommendedRAMGigabytes: 8
         )
     }
 #endif
