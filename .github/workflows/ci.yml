@@ -114,12 +114,26 @@ jobs:
             fi
           done
 
+      - name: Resolve package dependencies
+        # Xcode 26 sometimes tries to read git config from a SwiftPM
+        # cache path before resolution has populated it, failing with
+        # "cannot change to .../repositories/<pkg>: No such file or
+        # directory". Force a clean resolve into a workspace-local
+        # cache so the build step finds everything pre-cloned.
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project Examples/SampleApp/AriaSample.xcodeproj \
+            -scheme AriaSample \
+            -clonedSourcePackagesDirPath .spm-cache \
+            -skipPackagePluginValidation
+
       - name: Build AriaSample for iOS Simulator
         run: |
           xcodebuild build \
             -project Examples/SampleApp/AriaSample.xcodeproj \
             -scheme AriaSample \
             -destination 'generic/platform=iOS Simulator' \
+            -clonedSourcePackagesDirPath .spm-cache \
             -skipPackagePluginValidation \
             CODE_SIGN_IDENTITY='' \
             CODE_SIGNING_REQUIRED=NO \
