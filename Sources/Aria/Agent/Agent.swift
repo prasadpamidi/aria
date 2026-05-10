@@ -24,6 +24,12 @@ public struct Agent: Sendable {
 
     // MARK: Public
 
+    /// Read access to the agent's static configuration. Public so
+    /// out-of-module extensions (e.g., `AriaApple`'s
+    /// `respond(_:as:)`) can resolve the provider; the loop helpers in
+    /// sibling files in this module also rely on it.
+    public let config: AgentConfig
+
     /// Stream the agent's events for the given input.
     ///
     /// The returned stream emits `AgentEvent`s as they happen. The stream
@@ -45,13 +51,6 @@ public struct Agent: Sendable {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
-
-    // MARK: Internal
-
-    /// Internal so loop helpers in sibling files (`AgentStep.swift`,
-    /// `AgentProviderStream.swift`, `AgentToolExecution.swift`) can read
-    /// it. Swift's `private` is file-scoped, not type-scoped.
-    let config: AgentConfig
 
     // MARK: Private
 
