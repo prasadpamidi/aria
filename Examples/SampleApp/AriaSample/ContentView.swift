@@ -65,6 +65,8 @@ struct ContentView: View {
             if #available(iOS 26.0, macOS 26.0, *) {
                 Button("Suggest") { Task { await self.runSuggest() } }
                     .buttonStyle(.bordered).controlSize(.small).disabled(self.isStreaming)
+                Button("Graph") { Task { await self.runHaikuChain() } }
+                    .buttonStyle(.bordered).controlSize(.small).disabled(self.isStreaming)
             }
         #endif
     }
@@ -354,6 +356,69 @@ struct ContentView: View {
                 .map { "  \($0.offset + 1). \($0.element)" }
                 .joined(separator: "\n")
             return "🎯 \(suggestion.title)\n\n\(suggestion.summary)\n\nSteps:\n\(steps)"
+        }
+    }
+#endif
+
+// MARK: - StateGraph demo
+
+#if canImport(FoundationModels)
+    extension ContentView {
+        /// Build and run the haiku-chain `StateGraph`, updating the
+        /// inline assistant bubble each time a node finishes so the
+        /// user can watch the state fill in step by step.
+        @available(iOS 26.0, macOS 26.0, *)
+        @MainActor
+        func runHaikuChain() async {
+            self.isStreaming = true
+            defer { isStreaming = false }
+            self.transcript.append(.user("[Graph] haiku chain"))
+            self.transcript.append(.assistant("[Graph] starting…"))
+            do {
+                let compiled = try HaikuChain.build()
+                var lastState = HaikuChainState()
+                for try await event in compiled.stream(initial: lastState) {
+                    switch event {
+                    case let .nodeStart(name, state):
+                        self.updateLastAssistant(
+                            text: Self.renderHaiku(state: state, running: name)
+                        )
+                    case let .nodeEnd(_, state):
+                        lastState = state
+                        self.updateLastAssistant(
+                            text: Self.renderHaiku(state: state, running: nil)
+                        )
+                    case let .finish(state):
+                        lastState = state
+                        self.updateLastAssistant(
+                            text: Self.renderHaiku(state: state, running: nil)
+                        )
+                    }
+                }
+            } catch {
+                self.updateLastAssistant(text: "[Graph error] \(error)")
+            }
+        }
+
+        @available(iOS 26.0, macOS 26.0, *)
+        private static func renderHaiku(
+            state: HaikuChainState,
+            running: String?
+        ) -> String {
+            var lines = ["[Graph]"]
+            if let topic = state.topic {
+                lines.append("→ brainstorm: \(topic)")
+            }
+            if let haiku = state.haiku {
+                lines.append("→ haiku:\n\(haiku)")
+            }
+            if let critique = state.critique {
+                lines.append("→ critique: \(critique)")
+            }
+            if let running {
+                lines.append("running \(running)…")
+            }
+            return lines.joined(separator: "\n")
         }
     }
 #endif
