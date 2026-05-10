@@ -1,4 +1,4 @@
-// swift-tools-version: 5.10
+// swift-tools-version: 6.1
 //
 // Aria — Composable on-device agent runtime for Apple platforms.
 // See docs/ for architecture and design.
