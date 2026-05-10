@@ -32,6 +32,7 @@ struct ContentView: View {
     // MARK: Private
 
     private static let threadId = "default"
+    private static let memoryNamespace = ["sample", "default"]
 
     @State private var input: String = ""
     @State private var transcript: [TranscriptItem] = []
@@ -157,16 +158,7 @@ struct ContentView: View {
         @available(iOS 26.0, macOS 26.0, *)
         @MainActor
         private func streamWithAgent(userMessage: String) async {
-            let agent = Agent(config: AgentConfig(
-                provider: FoundationModelsProvider(),
-                tools: [AnyTool(CurrentTimeTool())],
-                systemPrompt:
-                "You are a concise, helpful assistant. "
-                    + "When the user asks for the current time or date, "
-                    + "call the current_time tool.",
-                threadId: Self.threadId,
-                middleware: [HistoryMiddleware(history: self.storage.chatHistory)]
-            ))
+            let agent = self.makeAgent()
             var assistantText = ""
             do {
                 for try await event in agent.stream(.message(.user(userMessage))) {
@@ -174,16 +166,10 @@ struct ContentView: View {
                     case let .textDelta(chunk):
                         assistantText += chunk
                         self.updateLastAssistant(text: assistantText)
-                    case let .toolExecutionEnd(_, result):
-                        let badge = result.isError
-                            ? "[tool error]"
-                            : "[called current_time]"
-                        if assistantText.isEmpty {
-                            self.updateLastAssistant(text: badge + "\n")
-                        } else {
-                            assistantText += "\n" + badge + "\n"
-                            self.updateLastAssistant(text: assistantText)
-                        }
+                    case let .toolCallRequested(call):
+                        let badge = "[calling \(call.name)]"
+                        assistantText = self.withInlineBadge(assistantText, badge: badge)
+                        self.updateLastAssistant(text: assistantText)
                     case .finish:
                         return
                     case let .error(err):
@@ -196,6 +182,67 @@ struct ContentView: View {
             } catch {
                 self.updateLastAssistant(text: "Error: \(error)")
             }
+        }
+
+        @available(iOS 26.0, macOS 26.0, *)
+        private func makeAgent() -> Agent {
+            let memory = self.makeMemoryStore()
+            let middlewares = self.makeMiddleware(memory: memory)
+            var tools: [AnyTool] = [AnyTool(CurrentTimeTool())]
+            if let memory {
+                tools.append(
+                    AnyTool(RememberTool(memoryStore: memory, namespace: Self.memoryNamespace))
+                )
+            }
+            return Agent(config: AgentConfig(
+                provider: FoundationModelsProvider(),
+                tools: tools,
+                systemPrompt: Self.systemPrompt(memoryEnabled: memory != nil),
+                threadId: Self.threadId,
+                middleware: middlewares
+            ))
+        }
+
+        /// Returns a configured `MemoryStore`, or `nil` when the OS does
+        /// not ship an `NLEmbedding` for the chosen language. The sample
+        /// degrades gracefully — agent + history still work.
+        private func makeMemoryStore() -> (any MemoryStore)? {
+            guard let embedder = NLEmbeddingEmbedder() else {
+                return nil
+            }
+            let store = InMemoryVectorStore(dimensions: embedder.dimensions)
+            return DefaultMemoryStore(embedder: embedder, store: store)
+        }
+
+        private func makeMiddleware(memory: (any MemoryStore)?) -> [any AgentMiddleware] {
+            var middlewares: [any AgentMiddleware] = [
+                HistoryMiddleware(history: self.storage.chatHistory),
+            ]
+            if let memory {
+                middlewares.append(
+                    RAGMiddleware(memoryStore: memory, namespace: Self.memoryNamespace, topK: 4)
+                )
+            }
+            return middlewares
+        }
+
+        private static func systemPrompt(memoryEnabled: Bool) -> String {
+            var lines: [String] = [
+                "You are a concise, helpful assistant.",
+                "When the user asks about the current time or date, call the current_time tool.",
+            ]
+            if memoryEnabled {
+                lines.append(
+                    "When the user shares a durable preference, biographical fact, or "
+                        + "anything they will want you to remember in the future, call the "
+                        + "remember_fact tool with a single concise sentence."
+                )
+            }
+            return lines.joined(separator: " ")
+        }
+
+        private func withInlineBadge(_ text: String, badge: String) -> String {
+            text.isEmpty ? badge + "\n" : text + "\n" + badge + "\n"
         }
     #endif
 
