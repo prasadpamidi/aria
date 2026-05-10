@@ -265,7 +265,13 @@
 
         private func progressRow(_ progress: MLXDownloadProgress) -> some View {
             VStack(alignment: .leading, spacing: 2) {
-                ProgressView(value: progress.fraction ?? 0)
+                if let fraction = progress.fraction {
+                    ProgressView(value: fraction)
+                } else {
+                    // No total yet — show indeterminate motion so the
+                    // user doesn't see a frozen 0% bar.
+                    ProgressView()
+                }
                 Text(progressLabel(progress))
                     .font(.caption2).foregroundStyle(.secondary)
             }
