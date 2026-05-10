@@ -25,10 +25,12 @@
 
         public init(
             defaultInstructions: String? = nil,
-            capabilities: ProviderCapabilities = .foundationModelsDefault
+            capabilities: ProviderCapabilities = .foundationModelsDefault,
+            typedTools: [FoundationModelsToolFactory] = []
         ) {
             self.defaultInstructions = defaultInstructions
             self.capabilities = capabilities
+            self.typedTools = typedTools
         }
 
         // MARK: Public
@@ -109,6 +111,7 @@
         // MARK: Private
 
         private let defaultInstructions: String?
+        private let typedTools: [FoundationModelsToolFactory]
 
         private static func checkAvailability() throws {
             let availability = SystemLanguageModel.default.availability
@@ -125,17 +128,6 @@
                     "FoundationModels availability unknown",
                     underlying: nil
                 )
-            }
-        }
-
-        private static func buildBridgeTools(
-            from executableTools: [AnyTool],
-            continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation
-        ) throws -> [any FoundationModels.Tool] {
-            try executableTools.map { ariaTool in
-                try AriaBridgeTool(ariaTool: ariaTool) { event in
-                    continuation.yield(event)
-                }
             }
         }
 
@@ -185,39 +177,32 @@
 
         private func run(
             messages: [Message],
-            executableTools: [AnyTool],
+            executableTools _: [AnyTool],
             continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation
         ) async throws {
             try Self.checkAvailability()
 
             let (prompt, history) = try Self.extractPrompt(from: messages)
-            let bridgeTools = try Self.buildBridgeTools(
-                from: executableTools,
-                continuation: continuation
-            )
-            // Both advertisement paths are needed:
-            //
-            // - `Transcript.Instructions.toolDefinitions` tells the model
-            //   *which* tools exist. Without it the model never knew tools
-            //   were available and never tried to invoke them — falling
-            //   back to text-pattern hallucination from training data.
-            // - `LanguageModelSession.init(tools:)` registers the runtime
-            //   bridges so an actual function-call request resolves to
-            //   our `AriaBridgeTool.call`.
-            //
-            // The earlier "model writes ToolName: …" mimicry came from
-            // each tool's *schema* being rendered into the visible
-            // instructions, not from the toolDefinitions list itself.
-            // We mute that schema rendering per-tool via
-            // `AriaBridgeTool.includesSchemaInInstructions = false`.
-            let toolDefinitions = bridgeTools.map { Transcript.ToolDefinition(tool: $0) }
+            // Build the typed FM tools. Each factory is invoked with a
+            // closure that yields events into this stream's
+            // continuation, so per-call `toolCallExecuted` events flow
+            // back through the agent layer. We deliberately do *not*
+            // bridge `executableTools` through `AriaBridgeTool` — the
+            // probe (see `FoundationModelsToolProbe`) confirmed that
+            // FoundationModels' iOS 26 tool router never resolves to
+            // `GeneratedContent`-typed `Arguments`. Registering them
+            // would only make the model mimic tool-call syntax in text.
+            let fmTools: [any FoundationModels.Tool] = self.typedTools.map { factory in
+                factory { event in continuation.yield(event) }
+            }
+            let toolDefinitions = fmTools.map { Transcript.ToolDefinition(tool: $0) }
             let transcript = Self.buildTranscript(
                 history: history,
                 defaultInstructions: self.defaultInstructions,
                 toolDefinitions: toolDefinitions
             )
             let session = LanguageModelSession(
-                tools: bridgeTools,
+                tools: fmTools,
                 transcript: transcript
             )
 

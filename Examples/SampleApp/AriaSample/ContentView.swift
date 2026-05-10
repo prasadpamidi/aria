@@ -198,15 +198,25 @@ struct ContentView: View {
         private func makeAgent() -> Agent {
             let memory = self.makeMemoryStore()
             let middlewares = self.makeMiddleware(memory: memory)
-            var tools: [AnyTool] = [AnyTool(CurrentTimeTool())]
+            // Register each tool once and harvest both the AnyTool (for
+            // the agent's portable list) and the typed FM factory (for
+            // the provider's tool router) from the same kit. This keeps
+            // the two lists in sync — the bridge is the only path FM's
+            // iOS 26 router actually fires.
+            var kits: [FoundationModelsToolKit] = [
+                registerFoundationModelsTool(CurrentTimeTool()),
+            ]
             if let memory {
-                tools.append(
-                    AnyTool(RememberTool(memoryStore: memory, namespace: Self.memoryNamespace))
-                )
+                kits.append(registerFoundationModelsTool(
+                    RememberTool(memoryStore: memory, namespace: Self.memoryNamespace)
+                ))
             }
+            let provider = FoundationModelsProvider(
+                typedTools: kits.map(\.factory)
+            )
             return Agent(config: AgentConfig(
-                provider: FoundationModelsProvider(),
-                tools: tools,
+                provider: provider,
+                tools: kits.map(\.anyTool),
                 systemPrompt: Self.systemPrompt(memoryEnabled: memory != nil),
                 threadId: Self.threadId,
                 middleware: middlewares
