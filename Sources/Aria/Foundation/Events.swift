@@ -82,7 +82,7 @@ public enum ProviderEvent: Sendable, Equatable {
 // MARK: - ToolExecutionResult
 
 /// The outcome of executing a tool.
-public struct ToolExecutionResult: Sendable, Equatable {
+public struct ToolExecutionResult: Sendable, Equatable, Codable {
     // MARK: Lifecycle
 
     public init(output: JSONValue, isError: Bool = false, duration: Duration = .zero) {

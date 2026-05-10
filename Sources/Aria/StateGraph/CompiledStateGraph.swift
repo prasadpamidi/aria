@@ -41,17 +41,23 @@ public struct CompiledStateGraph<State: Sendable & Codable>: Sendable {
 
         public init(
             maxSteps: Int = 256,
-            checkpoint: CheckpointConfig? = nil
+            checkpoint: CheckpointConfig? = nil,
+            recorder: SessionRecorder? = nil
         ) {
             precondition(maxSteps > 0, "maxSteps must be > 0")
             self.maxSteps = maxSteps
             self.checkpoint = checkpoint
+            self.recorder = recorder
         }
 
         // MARK: Public
 
         public let maxSteps: Int
         public let checkpoint: CheckpointConfig?
+        /// When set, every node visit is recorded into the supplied
+        /// `SessionRecorder` so a `SessionBundle` can be exported at
+        /// the end of the run.
+        public let recorder: SessionRecorder?
     }
 
     // MARK: - CheckpointConfig
