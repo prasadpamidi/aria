@@ -195,15 +195,26 @@
                 from: executableTools,
                 continuation: continuation
             )
-            // Tools are advertised exclusively through `LanguageModelSession.init(tools:)`.
-            // Putting them in `Transcript.Instructions.toolDefinitions` as well caused the
-            // model to mimic the "ToolName: arguments" prompt format in its text response
-            // instead of invoking the tools through FoundationModels' native function-call
-            // path — see PR #N for the diagnostic screenshots.
+            // Both advertisement paths are needed:
+            //
+            // - `Transcript.Instructions.toolDefinitions` tells the model
+            //   *which* tools exist. Without it the model never knew tools
+            //   were available and never tried to invoke them — falling
+            //   back to text-pattern hallucination from training data.
+            // - `LanguageModelSession.init(tools:)` registers the runtime
+            //   bridges so an actual function-call request resolves to
+            //   our `AriaBridgeTool.call`.
+            //
+            // The earlier "model writes ToolName: …" mimicry came from
+            // each tool's *schema* being rendered into the visible
+            // instructions, not from the toolDefinitions list itself.
+            // We mute that schema rendering per-tool via
+            // `AriaBridgeTool.includesSchemaInInstructions = false`.
+            let toolDefinitions = bridgeTools.map { Transcript.ToolDefinition(tool: $0) }
             let transcript = Self.buildTranscript(
                 history: history,
                 defaultInstructions: self.defaultInstructions,
-                toolDefinitions: []
+                toolDefinitions: toolDefinitions
             )
             let session = LanguageModelSession(
                 tools: bridgeTools,
