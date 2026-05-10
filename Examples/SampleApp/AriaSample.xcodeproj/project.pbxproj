@@ -11,6 +11,7 @@
 		AA00000000000000000000A2 /* AriaApple in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000B2 /* AriaApple */; };
 		AA00000000000000000000A3 /* Aria in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000B3 /* Aria */; };
 		AA00000000000000000000A4 /* AriaTesting in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000B4 /* AriaTesting */; };
+		AA00000000000000000000A5 /* AriaMLX in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000B5 /* AriaMLX */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -61,6 +62,7 @@
 			files = (
 				AA00000000000000000000A1 /* Aria in Frameworks */,
 				AA00000000000000000000A2 /* AriaApple in Frameworks */,
+				AA00000000000000000000A5 /* AriaMLX in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -125,6 +127,7 @@
 			packageProductDependencies = (
 				AA00000000000000000000B1 /* Aria */,
 				AA00000000000000000000B2 /* AriaApple */,
+				AA00000000000000000000B5 /* AriaMLX */,
 			);
 			productName = AriaSample;
 			productReference = E4AD58D72FAFC023004E4F3F /* AriaSample.app */;
@@ -624,6 +627,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AA00000000000000000000C1 /* XCLocalSwiftPackageReference "../.." */;
 			productName = AriaTesting;
+		};
+		AA00000000000000000000B5 /* AriaMLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AA00000000000000000000C1 /* XCLocalSwiftPackageReference "../.." */;
+			productName = AriaMLX;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
