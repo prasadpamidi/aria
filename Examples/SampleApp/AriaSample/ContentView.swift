@@ -109,33 +109,21 @@ struct ContentView: View {
             return
         }
 
-        self.transcript.append(.user(trimmed))
+        let userMessage = trimmed
+        self.transcript.append(.user(userMessage))
         self.input = ""
         self.isStreaming = true
         defer { isStreaming = false }
 
-        // Conversation history seen so far, plus the new user message.
-        // PR 2 sends only single-turn history — multi-turn arrives with the
-        // agent loop in PR 3. The mapping below preserves prior turns so the
-        // model has context.
-        let history = self.transcript.map { item in
-            switch item.role {
-            case .user: Message.user(item.content)
-            case .assistant: Message.assistant(item.content)
-            }
-        }
-        let messages: [Message] =
-            [.system("You are a concise, helpful assistant.")] + history
-
         self.transcript.append(.assistant(""))
-        await self.streamFromProvider(messages: messages)
+        await self.runAgent(userMessage: userMessage)
     }
 
     @MainActor
-    private func streamFromProvider(messages: [Message]) async {
+    private func runAgent(userMessage: String) async {
         #if canImport(FoundationModels)
             if #available(iOS 26.0, macOS 26.0, *) {
-                await self.streamWithFoundationModels(messages: messages)
+                await self.streamWithAgent(userMessage: userMessage)
                 return
             }
         #endif
@@ -147,20 +135,36 @@ struct ContentView: View {
     #if canImport(FoundationModels)
         @available(iOS 26.0, macOS 26.0, *)
         @MainActor
-        private func streamWithFoundationModels(messages: [Message]) async {
-            let provider = FoundationModelsProvider()
+        private func streamWithAgent(userMessage: String) async {
+            let agent = Agent(config: AgentConfig(
+                provider: FoundationModelsProvider(),
+                tools: [AnyTool(CurrentTimeTool())],
+                systemPrompt:
+                "You are a concise, helpful assistant. "
+                    + "When the user asks for the current time or date, "
+                    + "call the current_time tool."
+            ))
             var assistantText = ""
             do {
-                for try await event in provider.stream(
-                    messages: messages,
-                    tools: [],
-                    options: .init()
-                ) {
+                for try await event in agent.stream(.message(.user(userMessage))) {
                     switch event {
                     case let .textDelta(chunk):
                         assistantText += chunk
                         self.updateLastAssistant(text: assistantText)
-                    case .messageStop:
+                    case let .toolExecutionEnd(_, result):
+                        let badge = result.isError
+                            ? "[tool error]"
+                            : "[called current_time]"
+                        if assistantText.isEmpty {
+                            self.updateLastAssistant(text: badge + "\n")
+                        } else {
+                            assistantText += "\n" + badge + "\n"
+                            self.updateLastAssistant(text: assistantText)
+                        }
+                    case .finish:
+                        return
+                    case let .error(err):
+                        self.updateLastAssistant(text: "Error: \(err)")
                         return
                     default:
                         break
