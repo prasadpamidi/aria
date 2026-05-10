@@ -1,4 +1,5 @@
 import Foundation
+import Tracing
 
 // MARK: - ProviderStreamResponse
 
@@ -30,50 +31,96 @@ extension Agent {
         executableTools: [AnyTool],
         continuation: AsyncThrowingStream<AgentEvent, any Error>.Continuation
     ) async throws -> ProviderStreamResponse {
-        var assembler = ToolCallAssembler()
-        var preExecuted: [(call: ToolCall, result: ToolExecutionResult)] = []
-        var assistantText = ""
-        var finishReason: FinishReason = .endTurn
+        try await withSpan(AriaSemConv.Span.providerStream, ofKind: .client) { span in
+            span.attributes[AriaSemConv.GenAI.system] =
+                self.config.provider.capabilities.modelIdentifier
+            span.attributes[AriaSemConv.GenAI.requestModel] =
+                self.config.provider.capabilities.modelIdentifier
+            return try await self.streamProviderResponseSpanned(
+                messages: messages,
+                executableTools: executableTools,
+                continuation: continuation,
+                span: span
+            )
+        }
+    }
 
+    private func streamProviderResponseSpanned(
+        messages: [Message],
+        executableTools: [AnyTool],
+        continuation: AsyncThrowingStream<AgentEvent, any Error>.Continuation,
+        span: Span
+    ) async throws -> ProviderStreamResponse {
+        var accumulator = ProviderStreamAccumulator()
         let stream = self.config.provider.stream(
             messages: messages,
             executableTools: executableTools,
             options: self.config.generationOptions
         )
-
         for try await event in stream {
             try Task.checkCancellation()
-            switch event {
-            case .messageStart, .usage:
-                continue
-            case let .textDelta(chunk):
-                assistantText += chunk
-                continuation.yield(.textDelta(chunk))
-            case let .toolCallStart(call):
-                assembler.start(call: call)
-            case let .toolCallDelta(id, delta):
-                assembler.appendDelta(id: id, delta: delta)
-            case let .toolCallEnd(id):
-                if let finalized = assembler.end(id: id) {
-                    continuation.yield(.toolCallRequested(finalized))
-                }
-            case let .toolCallExecuted(call, result):
-                preExecuted.append((call, result))
-                continuation.yield(.toolCallRequested(call))
-                continuation.yield(.toolExecutionStart(callId: call.id))
-                continuation.yield(.toolExecutionEnd(callId: call.id, result: result))
-            case let .messageStop(reason):
-                finishReason = reason
-            }
+            self.process(event: event, accumulator: &accumulator, continuation: continuation, span: span)
         }
-
+        span.attributes[AriaSemConv.GenAI.finishReasons] = [String(describing: accumulator.finishReason)]
         return ProviderStreamResponse(
-            assistantText: assistantText,
-            toolCalls: assembler.collected,
-            preExecuted: preExecuted,
-            finishReason: finishReason
+            assistantText: accumulator.assistantText,
+            toolCalls: accumulator.assembler.collected,
+            preExecuted: accumulator.preExecuted,
+            finishReason: accumulator.finishReason
         )
     }
+
+    /// Translate one provider event into agent-side accumulator
+    /// updates + emitted `AgentEvent`s + span/metric annotations.
+    private func process(
+        event: ProviderEvent,
+        accumulator: inout ProviderStreamAccumulator,
+        continuation: AsyncThrowingStream<AgentEvent, any Error>.Continuation,
+        span: Span
+    ) {
+        switch event {
+        case .messageStart:
+            return
+        case let .usage(usage):
+            // Surface OTel GenAI semconv attributes + metrics so
+            // downstream backends auto-render token usage.
+            span.attributes[AriaSemConv.GenAI.inputTokens] = Int64(usage.inputTokens)
+            span.attributes[AriaSemConv.GenAI.outputTokens] = Int64(usage.outputTokens)
+            let system = self.config.provider.capabilities.modelIdentifier
+            AriaMetrics.tokenUsage(system: system, type: "input").record(usage.inputTokens)
+            AriaMetrics.tokenUsage(system: system, type: "output").record(usage.outputTokens)
+        case let .textDelta(chunk):
+            accumulator.assistantText += chunk
+            continuation.yield(.textDelta(chunk))
+        case let .toolCallStart(call):
+            accumulator.assembler.start(call: call)
+        case let .toolCallDelta(id, delta):
+            accumulator.assembler.appendDelta(id: id, delta: delta)
+        case let .toolCallEnd(id):
+            if let finalized = accumulator.assembler.end(id: id) {
+                continuation.yield(.toolCallRequested(finalized))
+            }
+        case let .toolCallExecuted(call, result):
+            accumulator.preExecuted.append((call, result))
+            continuation.yield(.toolCallRequested(call))
+            continuation.yield(.toolExecutionStart(callId: call.id))
+            continuation.yield(.toolExecutionEnd(callId: call.id, result: result))
+        case let .messageStop(reason):
+            accumulator.finishReason = reason
+        }
+    }
+}
+
+// MARK: - ProviderStreamAccumulator
+
+/// Mutable state collected as the provider stream is iterated. Pulled
+/// out so `streamProviderResponseSpanned` can split the loop body
+/// without juggling four independent locals.
+private struct ProviderStreamAccumulator {
+    var assembler = ToolCallAssembler()
+    var preExecuted: [(call: ToolCall, result: ToolExecutionResult)] = []
+    var assistantText: String = ""
+    var finishReason: FinishReason = .endTurn
 }
 
 // MARK: - ToolCallAssembler
