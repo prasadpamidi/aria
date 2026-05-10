@@ -375,9 +375,16 @@ struct ContentView: View {
                 ))
             }
             let provider: any LLMProvider = self.makeProvider(kits: kits)
+            // Vision-only MLX models (e.g. Gemma 4 e2b/e4b VLM) advertise
+            // `supportsToolUse: false`. Passing tools to them trips
+            // `Agent.validateConfig`, so gate the agent's tool list on
+            // the active provider's capability.
+            let toolsForAgent = provider.capabilities.supportsToolUse
+                ? kits.map(\.anyTool)
+                : []
             return Agent(config: AgentConfig(
                 provider: provider,
-                tools: kits.map(\.anyTool),
+                tools: toolsForAgent,
                 systemPrompt: Self.systemPrompt(memoryEnabled: memory != nil),
                 threadId: Self.threadId,
                 middleware: middlewares
