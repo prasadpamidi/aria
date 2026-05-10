@@ -31,6 +31,12 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
         .package(url: "https://github.com/apple/swift-collections.git", from: "1.1.0"),
+        // OpenTelemetry-compatible tracing + metrics. The libraries are
+        // protocol-only and ship with no-op defaults; consumers wire up
+        // an exporter (swift-otel, etc.) at process start to send data
+        // anywhere. Aria emits OTel GenAI semantic-convention attributes.
+        .package(url: "https://github.com/apple/swift-distributed-tracing.git", from: "1.1.2"),
+        .package(url: "https://github.com/apple/swift-metrics.git", from: "2.5.0"),
         // Persistent memory (chat history + checkpointer) for AriaApple.
         // Apple-only — `Aria` core never imports it.
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.10.0"),
@@ -43,6 +49,8 @@ let package = Package(
             dependencies: [
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Collections", package: "swift-collections"),
+                .product(name: "Tracing", package: "swift-distributed-tracing"),
+                .product(name: "Metrics", package: "swift-metrics"),
             ],
             path: "Sources/Aria"
         ),

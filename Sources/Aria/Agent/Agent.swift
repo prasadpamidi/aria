@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import Tracing
 
 // MARK: - Agent
 
@@ -42,11 +43,21 @@ public struct Agent: Sendable {
     ) -> AsyncThrowingStream<AgentEvent, any Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                await self.runLoopHandlingErrors(
-                    input: input,
-                    options: options,
-                    continuation: continuation
-                )
+                await withSpan(AriaSemConv.Span.agentRun, ofKind: .internal) { span in
+                    span.attributes[AriaSemConv.GenAI.system] =
+                        self.config.provider.capabilities.modelIdentifier
+                    span.attributes[AriaSemConv.GenAI.requestModel] =
+                        self.config.provider.capabilities.modelIdentifier
+                    span.attributes[AriaSemConv.GenAI.operationName] = "chat"
+                    if let threadId = self.config.threadId {
+                        span.attributes[AriaSemConv.Aria.threadId] = threadId
+                    }
+                    await self.runLoopHandlingErrors(
+                        input: input,
+                        options: options,
+                        continuation: continuation
+                    )
+                }
             }
             continuation.onTermination = { _ in task.cancel() }
         }
@@ -113,40 +124,71 @@ public struct Agent: Sendable {
         for stepIndex in 0..<self.config.maxSteps {
             try options.checkpoint()
             continuation.yield(.stepStart(stepIndex))
-
-            state = try await self.applyMiddleware(state) { middleware, current in
-                try await middleware.beforeStep(current)
-            }
-
-            let outcome = try await self.runStep(
+            let (newState, outcome) = try await self.runOneStep(
+                stepIndex: stepIndex,
                 state: state,
                 continuation: continuation
             )
-            state = outcome.state
-
-            state = try await self.applyMiddleware(state) { middleware, current in
-                try await middleware.afterStep(current)
-            }
+            state = newState
+            AriaMetrics.agentStepsTotal.increment()
             continuation.yield(.stepEnd(stepIndex))
             state.stepCount += 1
 
             if outcome.isTerminal {
-                let finalEvent = AgentEvent.finish(outcome.finishReason)
-                state = try await self.applyMiddleware(state) { middleware, current in
-                    try await middleware.afterRun(current, finalEvent: finalEvent)
-                }
-                state.lastFinishReason = outcome.finishReason
-                continuation.yield(finalEvent)
-                continuation.finish()
+                try await self.finalize(
+                    state: &state,
+                    finishReason: outcome.finishReason,
+                    continuation: continuation
+                )
                 return
             }
         }
 
-        let finalEvent = AgentEvent.finish(.maxStepsReached)
-        state = try await self.applyMiddleware(state) { middleware, current in
-            try await middleware.afterRun(current, finalEvent: finalEvent)
+        try await self.finalize(
+            state: &state,
+            finishReason: .maxStepsReached,
+            continuation: continuation
+        )
+    }
+
+    /// Run one step inside a `agent.step` span: apply beforeStep, run
+    /// the provider/tool round, apply afterStep. Returns the new state
+    /// and the step's outcome.
+    private func runOneStep(
+        stepIndex: Int,
+        state: AgentState,
+        continuation: AsyncThrowingStream<AgentEvent, any Error>.Continuation
+    ) async throws -> (AgentState, StepOutcome) {
+        try await withSpan(AriaSemConv.Span.agentStep, ofKind: .internal) { span in
+            span.attributes[AriaSemConv.Aria.stepIndex] = stepIndex
+            var localState = try await self.applyMiddleware(state) { mw, current in
+                try await mw.beforeStep(current)
+            }
+            let outcome = try await self.runStep(
+                state: localState,
+                continuation: continuation
+            )
+            localState = outcome.state
+            localState = try await self.applyMiddleware(localState) { mw, current in
+                try await mw.afterStep(current)
+            }
+            return (localState, outcome)
         }
-        state.lastFinishReason = .maxStepsReached
+    }
+
+    /// Apply afterRun middleware and finish the stream with the
+    /// terminal `AgentEvent.finish(reason)`. Mutates `state` so the
+    /// caller can return early after invoking.
+    private func finalize(
+        state: inout AgentState,
+        finishReason: FinishReason,
+        continuation: AsyncThrowingStream<AgentEvent, any Error>.Continuation
+    ) async throws {
+        let finalEvent = AgentEvent.finish(finishReason)
+        state = try await self.applyMiddleware(state) { mw, current in
+            try await mw.afterRun(current, finalEvent: finalEvent)
+        }
+        state.lastFinishReason = finishReason
         continuation.yield(finalEvent)
         continuation.finish()
     }
