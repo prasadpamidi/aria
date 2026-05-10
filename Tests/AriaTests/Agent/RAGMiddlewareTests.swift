@@ -33,6 +33,44 @@ final class RAGMiddlewareTests: XCTestCase {
         )
     }
 
+    func testOnRecallFiresWithMatchedItems() async throws {
+        let memory = self.makeMemoryStore()
+        try await memory.remember(
+            MemoryItem(content: "user prefers metric units"),
+            namespace: ["t"]
+        )
+        try await memory.remember(
+            MemoryItem(content: "user is vegetarian"),
+            namespace: ["t"]
+        )
+
+        // Use an actor to capture the recalled items synchronously
+        // across the @Sendable closure boundary.
+        actor Recorder {
+            private(set) var recalled: [String] = []
+            func record(_ items: [String]) {
+                self.recalled = items
+            }
+        }
+        let recorder = Recorder()
+
+        let middleware = RAGMiddleware(
+            memoryStore: memory,
+            namespace: ["t"],
+            topK: 4,
+            onRecall: { matches in
+                let texts = matches.map(\.item.content)
+                Task { await recorder.record(texts) }
+            }
+        )
+        var state = AgentState(threadId: "t", messages: [.user("user preferences?")])
+        state = try await middleware.beforeStep(state)
+        // The closure dispatches into a Task; give it a tick to settle.
+        try await Task.sleep(for: .milliseconds(50))
+        let captured = await recorder.recalled
+        XCTAssertFalse(captured.isEmpty, "onRecall should have fired with matches")
+    }
+
     func testSkipsInjectionWhenNoMemoriesMatch() async throws {
         let memory = self.makeMemoryStore()
         // Empty store
