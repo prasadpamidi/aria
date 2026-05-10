@@ -4,7 +4,7 @@
 --swiftversion 5.10
 
 # File Options
---exclude .build,.swiftpm,DerivedData,build,vendor,Examples/SampleApp/AriaSample.xcodeproj
+--exclude .build,.swiftpm,DerivedData,build,vendor,Examples
 
 # Format Options
 --maxwidth 120
