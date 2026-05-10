@@ -27,6 +27,9 @@ struct ContentView: View {
         .task {
             await self.loadHistory()
         }
+        .sheet(isPresented: self.$memoriesSheetShown) {
+            MemoriesSheet(storage: self.storage, namespace: Self.memoryNamespace)
+        }
     }
 
     // MARK: Private
@@ -37,6 +40,11 @@ struct ContentView: View {
     @State private var input: String = ""
     @State private var transcript: [TranscriptItem] = []
     @State private var isStreaming: Bool = false
+    /// Per-turn recall surface. RAGMiddleware writes here via an
+    /// `onRecall` callback so the UI can render which memories were
+    /// injected before the model's reply.
+    @State private var memoryProbe = MemoryProbe()
+    @State private var memoriesSheetShown = false
 
     private let storage: GRDBStorage
 
@@ -59,6 +67,8 @@ struct ContentView: View {
     }
 
     @ViewBuilder private var headerActions: some View {
+        Button("Mem") { self.memoriesSheetShown = true }
+            .buttonStyle(.bordered).controlSize(.small)
         Button("Clear") { Task { await self.clearHistory() } }
             .buttonStyle(.bordered).controlSize(.small).disabled(self.isStreaming)
         #if canImport(FoundationModels)
@@ -66,6 +76,8 @@ struct ContentView: View {
                 Button("Suggest") { Task { await self.runSuggest() } }
                     .buttonStyle(.bordered).controlSize(.small).disabled(self.isStreaming)
                 Button("Graph") { Task { await self.runHaikuChain() } }
+                    .buttonStyle(.bordered).controlSize(.small).disabled(self.isStreaming)
+                Button("Resume") { Task { await self.resumeHaikuChain() } }
                     .buttonStyle(.bordered).controlSize(.small).disabled(self.isStreaming)
             }
         #endif
@@ -171,6 +183,7 @@ struct ContentView: View {
         @available(iOS 26.0, macOS 26.0, *)
         @MainActor
         private func streamWithAgent(userMessage: String) async {
+            self.memoryProbe.lastRecalled = []
             let agent = self.makeAgent()
             var assistantText = ""
             do {
@@ -178,11 +191,11 @@ struct ContentView: View {
                     switch event {
                     case let .textDelta(chunk):
                         assistantText += chunk
-                        self.updateLastAssistant(text: assistantText)
+                        self.updateLastAssistant(text: self.composeAssistant(assistantText))
                     case let .toolCallRequested(call):
                         let badge = "[calling \(call.name)]"
                         assistantText = self.withInlineBadge(assistantText, badge: badge)
-                        self.updateLastAssistant(text: assistantText)
+                        self.updateLastAssistant(text: self.composeAssistant(assistantText))
                     case .finish:
                         return
                     case let .error(err):
@@ -195,6 +208,19 @@ struct ContentView: View {
             } catch {
                 self.updateLastAssistant(text: "Error: \(error)")
             }
+        }
+
+        /// Prepend a "recalled:" badge to the assistant text when
+        /// RAGMiddleware injected memories on this turn. Keeps the
+        /// retrieval result visible inline so the user can verify
+        /// embeddings are actually doing something.
+        @MainActor
+        private func composeAssistant(_ text: String) -> String {
+            guard !self.memoryProbe.lastRecalled.isEmpty else {
+                return text
+            }
+            let badge = "[recalled: \(self.memoryProbe.lastRecalled.joined(separator: " · "))]"
+            return text.isEmpty ? badge : badge + "\n\n" + text
         }
 
         @available(iOS 26.0, macOS 26.0, *)
@@ -245,8 +271,17 @@ struct ContentView: View {
                 HistoryMiddleware(history: self.storage.chatHistory),
             ]
             if let memory {
+                let probe = self.memoryProbe
                 middlewares.append(
-                    RAGMiddleware(memoryStore: memory, namespace: Self.memoryNamespace, topK: 4)
+                    RAGMiddleware(
+                        memoryStore: memory,
+                        namespace: Self.memoryNamespace,
+                        topK: 4,
+                        onRecall: { matches in
+                            let texts = matches.map(\.item.content)
+                            Task { @MainActor in probe.lastRecalled = texts }
+                        }
+                    )
                 )
             }
             return middlewares
@@ -370,29 +405,64 @@ struct ContentView: View {
         @available(iOS 26.0, macOS 26.0, *)
         @MainActor
         func runHaikuChain() async {
+            await self.driveHaikuChain(
+                userLabel: "[Graph] haiku chain",
+                stream: { compiled, checkpointConfig in
+                    compiled.stream(
+                        initial: HaikuChainState(),
+                        options: .init(checkpoint: checkpointConfig)
+                    )
+                }
+            )
+        }
+
+        /// Resume the haiku chain from the latest checkpoint stored in
+        /// the GRDB checkpointer. Useful for verifying that the V2
+        /// resume API actually picks up where execution left off — kill
+        /// the app mid-Graph and tap Resume on relaunch.
+        @available(iOS 26.0, macOS 26.0, *)
+        @MainActor
+        func resumeHaikuChain() async {
+            await self.driveHaikuChain(
+                userLabel: "[Graph] resume",
+                stream: { compiled, _ in
+                    compiled.resume(
+                        threadId: HaikuChain.threadId,
+                        checkpointer: self.storage.checkpointer
+                    )
+                }
+            )
+        }
+
+        /// Shared driver: build the agent + compiled graph, run the
+        /// supplied `stream` closure, and re-render the bubble on each
+        /// event. Centralizes the checkpoint config so both fresh runs
+        /// and resumes write back to the same thread.
+        @available(iOS 26.0, macOS 26.0, *)
+        @MainActor
+        private func driveHaikuChain(
+            userLabel: String,
+            stream: (CompiledStateGraph<HaikuChainState>, CompiledStateGraph<HaikuChainState>.CheckpointConfig)
+                -> AsyncThrowingStream<StateGraphEvent<HaikuChainState>, any Error>
+        ) async {
             self.isStreaming = true
             defer { isStreaming = false }
-            self.transcript.append(.user("[Graph] haiku chain"))
+            self.transcript.append(.user(userLabel))
             self.transcript.append(.assistant("[Graph] starting…"))
             do {
-                let compiled = try HaikuChain.build()
-                var lastState = HaikuChainState()
-                for try await event in compiled.stream(initial: lastState) {
+                let compiled = try HaikuChain.build(agent: HaikuChain.makeAgent())
+                let checkpointConfig = CompiledStateGraph<HaikuChainState>.CheckpointConfig(
+                    checkpointer: self.storage.checkpointer,
+                    threadId: HaikuChain.threadId
+                )
+                for try await event in stream(compiled, checkpointConfig) {
                     switch event {
                     case let .nodeStart(name, state):
-                        self.updateLastAssistant(
-                            text: Self.renderHaiku(state: state, running: name)
-                        )
+                        self.updateLastAssistant(text: Self.renderHaiku(state: state, running: name))
                     case let .nodeEnd(_, state):
-                        lastState = state
-                        self.updateLastAssistant(
-                            text: Self.renderHaiku(state: state, running: nil)
-                        )
+                        self.updateLastAssistant(text: Self.renderHaiku(state: state, running: nil))
                     case let .finish(state):
-                        lastState = state
-                        self.updateLastAssistant(
-                            text: Self.renderHaiku(state: state, running: nil)
-                        )
+                        self.updateLastAssistant(text: Self.renderHaiku(state: state, running: nil))
                     }
                 }
             } catch {
