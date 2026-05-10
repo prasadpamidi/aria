@@ -34,7 +34,11 @@ struct ContentView: View {
         }
         .sheet(isPresented: self.$mlxModelsSheetShown) {
             #if canImport(AriaMLX)
-                MLXModelsSheet(appState: self.appState)
+                NavigationStack {
+                    MLXModelsView(manager: self.appState.modelManager)
+                        .navigationTitle("MLX Models")
+                        .navigationBarTitleDisplayMode(.inline)
+                }
             #endif
         }
         .sheet(item: self.$shareItem) { item in
@@ -94,8 +98,8 @@ struct ContentView: View {
     /// name when the user has selected one in the Models sheet.
     private var providerLabel: String {
         #if canImport(AriaMLX)
-            if let id = self.appState.selectedMLXModelID {
-                return MLXModelCatalog.entry(for: id)?.displayName ?? id
+            if let capabilities = self.appState.modelManager.activeCapabilities {
+                return capabilities.displayName
             }
         #endif
         return "Aria \(AriaInfo.version)  ·  FoundationModels"
@@ -239,8 +243,7 @@ struct ContentView: View {
     /// don't attach an image that would be silently dropped.
     private var activeProviderSupportsVision: Bool {
         #if canImport(AriaMLX)
-            if let id = self.appState.selectedMLXModelID,
-               let entry = MLXModelCatalog.entry(for: id) {
+            if let entry = self.appState.modelManager.activeCapabilities {
                 return entry.supportsVision
             }
         #endif
@@ -392,13 +395,10 @@ struct ContentView: View {
             kits: [FoundationModelsToolKit]
         ) -> any LLMProvider {
             #if canImport(AriaMLX)
-                if let id = self.appState.selectedMLXModelID,
-                   let capabilities = MLXModelCatalog.entry(for: id) {
-                    return MLXProvider(
-                        capabilities: capabilities,
-                        store: self.appState.mlxStore,
-                        defaultInstructions: Self.systemPrompt(memoryEnabled: false)
-                    )
+                if let mlx = self.appState.modelManager.makeProvider(
+                    defaultInstructions: Self.systemPrompt(memoryEnabled: false)
+                ) {
+                    return mlx
                 }
             #endif
             return FoundationModelsProvider(typedTools: kits.map(\.factory))
