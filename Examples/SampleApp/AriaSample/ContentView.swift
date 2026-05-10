@@ -51,36 +51,43 @@ struct ContentView: View {
     // MARK: - Subviews
 
     private var header: some View {
-        HStack {
+        HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Aria Sample").font(.headline)
                 Text("Aria \(AriaInfo.version)  ·  AriaApple \(AriaApple.version)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
             }
-            Spacer()
-            self.headerActions
+            Spacer(minLength: 8)
+            self.actionsMenu
         }
         .padding(.horizontal)
         .padding(.vertical, 12)
         .background(Color(.secondarySystemBackground))
     }
 
-    @ViewBuilder private var headerActions: some View {
-        Button("Mem") { self.memoriesSheetShown = true }
-            .buttonStyle(.bordered).controlSize(.small)
-        Button("Clear") { Task { await self.clearHistory() } }
-            .buttonStyle(.bordered).controlSize(.small).disabled(self.isStreaming)
-        #if canImport(FoundationModels)
-            if #available(iOS 26.0, macOS 26.0, *) {
-                Button("Suggest") { Task { await self.runSuggest() } }
-                    .buttonStyle(.bordered).controlSize(.small).disabled(self.isStreaming)
-                Button("Graph") { Task { await self.runHaikuChain() } }
-                    .buttonStyle(.bordered).controlSize(.small).disabled(self.isStreaming)
-                Button("Resume") { Task { await self.resumeHaikuChain() } }
-                    .buttonStyle(.bordered).controlSize(.small).disabled(self.isStreaming)
+    private var actionsMenu: some View {
+        Menu {
+            Button("Memories…") { self.memoriesSheetShown = true }
+            Button("Clear chat", role: .destructive) {
+                Task { await self.clearHistory() }
             }
-        #endif
+            #if canImport(FoundationModels)
+                if #available(iOS 26.0, macOS 26.0, *) {
+                    Section("Demos") {
+                        Button("Suggest activity") { Task { await self.runSuggest() } }
+                        Button("Run graph") { Task { await self.runHaikuChain() } }
+                        Button("Resume graph") { Task { await self.resumeHaikuChain() } }
+                    }
+                }
+            #endif
+        } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.title3)
+        }
+        .disabled(self.isStreaming)
     }
 
     private var messageList: some View {
