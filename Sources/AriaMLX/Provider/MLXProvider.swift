@@ -1,5 +1,6 @@
 #if canImport(MLXLMCommon)
     import Aria
+    import CoreImage
     import Foundation
     import MLXLMCommon
 
@@ -77,7 +78,12 @@
         /// Convert Aria's `[Message]` history into `MLXLMCommon.UserInput`.
         /// System messages collapse into a single instructions message
         /// (combined with `defaultInstructions`); user/assistant/tool
-        /// messages map one-for-one to `Chat.Message`.
+        /// messages map one-for-one to `Chat.Message`. When `Aria`
+        /// `ContentPart.image` parts are present on a user message,
+        /// they're converted to `MLXLMCommon.UserInput.Image` and
+        /// attached to that message's `images:`. Vision-only parts
+        /// the model doesn't understand are silently dropped — the
+        /// chat agent and provider stay decoupled.
         private static func userInput(
             from messages: [Aria.Message],
             defaultInstructions: String?,
@@ -95,7 +101,10 @@
                         instructionsParts.append(message.textContent)
                     }
                 case .user:
-                    chat.append(.user(message.textContent))
+                    chat.append(.user(
+                        message.textContent,
+                        images: Self.images(in: message)
+                    ))
                 case .assistant:
                     chat.append(.assistant(message.textContent))
                 case .tool:
@@ -112,6 +121,45 @@
                 prompt: .chat(chat),
                 tools: MLXToolBridge.toolSpecs(from: tools)
             )
+        }
+
+        /// Pull every `ContentPart.image` off a `Message` and convert
+        /// to `MLXLMCommon.UserInput.Image`. Aria's data and url
+        /// sources map directly; identifier sources fall through to
+        /// the consumer (we'd need a platform-specific resolver to
+        /// expand them).
+        private static func images(in message: Aria.Message) -> [UserInput.Image] {
+            var result: [UserInput.Image] = []
+            for part in message.content {
+                guard case let .image(image) = part else {
+                    continue
+                }
+                switch image.source {
+                case let .data(data, _):
+                    if let cgImage = Self.cgImage(from: data) {
+                        result.append(.ciImage(CIImage(cgImage: cgImage)))
+                    }
+                case let .url(url):
+                    result.append(.url(url))
+                case .identifier:
+                    // Identifier resolution requires platform context
+                    // (e.g. PHAsset on Apple). Skipped here so the
+                    // provider doesn't pull in PhotosUI; consumers
+                    // resolve to data() before passing the message.
+                    continue
+                }
+            }
+            return result
+        }
+
+        /// Decode `Data` into a `CGImage` via `CIImage` so image
+        /// formats other than raw bitmaps (jpeg, heic, png) work.
+        private static func cgImage(from data: Data) -> CGImage? {
+            let ciContext = CIContext()
+            guard let ciImage = CIImage(data: data) else {
+                return nil
+            }
+            return ciContext.createCGImage(ciImage, from: ciImage.extent)
         }
 
         private func streamCore(
@@ -160,7 +208,10 @@
             executableTools: [AnyTool],
             continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation
         ) async throws {
-            let container = try await self.store.container(for: self.modelCapabilities.id)
+            let container = try await self.store.container(
+                for: self.modelCapabilities.id,
+                kind: self.modelCapabilities.kind
+            )
             let userInput = try Self.userInput(
                 from: messages,
                 defaultInstructions: self.defaultInstructions,

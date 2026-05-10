@@ -1,9 +1,11 @@
 #if canImport(MLXLMCommon)
     import Foundation
     import HuggingFace
+    import MLXLLM
     import MLXLMCommon
     import MLXLMHuggingFace
     import MLXLMTransformers
+    import MLXVLM
 
     // MARK: - MLXDownloadProgress
 
@@ -64,14 +66,18 @@
         /// model is already cached — useful for "update available?" flows.
         public func loadContainer(
             id: String,
+            kind: MLXModelKind = .textOnly,
             revision: String = "main",
             useLatest: Bool = false,
             onProgress: @Sendable @escaping (MLXDownloadProgress) -> Void = { _ in }
         ) async throws -> ModelContainer {
-            try await MLXLMTransformers.loadModelContainer(
+            let factory: any GenericModelFactory<ModelContext, ModelContainer> = (kind == .vision)
+                ? VLMModelFactory.shared
+                : LLMModelFactory.shared
+            return try await factory.loadContainer(
                 from: self.hubClient,
-                id: id,
-                revision: revision,
+                using: TransformersLoader(),
+                configuration: ModelConfiguration(id: id, revision: revision),
                 useLatest: useLatest,
                 progressHandler: { progress in
                     onProgress(MLXDownloadProgress(progress: progress))
@@ -86,6 +92,7 @@
         /// which surfaces both).
         public func progressStream(
             id: String,
+            kind: MLXModelKind = .textOnly,
             revision: String = "main",
             useLatest: Bool = false
         ) -> AsyncThrowingStream<MLXDownloadProgress, any Error> {
@@ -94,6 +101,7 @@
                     do {
                         _ = try await self.loadContainer(
                             id: id,
+                            kind: kind,
                             revision: revision,
                             useLatest: useLatest,
                             onProgress: { tick in continuation.yield(tick) }
