@@ -2,19 +2,15 @@
     import Aria
     import Foundation
     import FoundationModels
-    import os
 
     // MARK: - GenerableTool
 
     /// An `Aria.Tool` whose `Input` is also `FoundationModels.Generable`.
     ///
     /// FoundationModels' tool routing on iOS/macOS 26 only fires for
-    /// tools whose `Arguments` is a compile-time `@Generable` type —
-    /// runtime `DynamicGenerationSchema` + `GeneratedContent` arguments
-    /// register but never resolve to a `call` (see
-    /// `FoundationModelsToolProbe`). Tools intended for use with
-    /// `FoundationModelsProvider` therefore have to declare their
-    /// `Input` with `@Generable`. Conformance is additive: a
+    /// tools whose `Arguments` is a compile-time `@Generable` type, so
+    /// any tool intended for `FoundationModelsProvider` has to declare
+    /// its `Input` with `@Generable`. Conformance is additive: a
     /// `GenerableTool` is still a regular `Aria.Tool` and continues to
     /// work against any other provider.
     @available(iOS 26.0, macOS 26.0, *)
@@ -63,11 +59,10 @@
 
     // MARK: - TypedAriaBridgeTool
 
-    /// `FoundationModels.Tool` adapter for a `GenerableTool`. Because
-    /// `Arguments` is the typed `Underlying.Input` (which is
-    /// `Generable`), FM's tool routing actually resolves to `call`,
-    /// unlike `AriaBridgeTool`'s `GeneratedContent` path which does not
-    /// fire on iOS 26.
+    /// `FoundationModels.Tool` adapter for a `GenerableTool`. The
+    /// generic `Arguments = Underlying.Input` exposes the consumer's
+    /// `@Generable` struct directly to FM, which is what its tool
+    /// router resolves against.
     @available(iOS 26.0, macOS 26.0, *)
     struct TypedAriaBridgeTool<Underlying: GenerableTool>: FoundationModels.Tool {
         // MARK: Lifecycle
@@ -93,9 +88,6 @@
         let description: String
 
         func call(arguments: Underlying.Input) async throws -> String {
-            Self.logger.debug(
-                "TypedAriaBridgeTool.call invoked: name=\(Underlying.name, privacy: .public)"
-            )
             let callId = UUID().uuidString
             let context = ToolContext(runId: UUID())
             let started = ContinuousClock.now
@@ -136,13 +128,6 @@
         }
 
         // MARK: Private
-
-        private static var logger: Logger {
-            Logger(
-                subsystem: "com.aria.AriaApple",
-                category: "TypedFoundationModelsBridge"
-            )
-        }
 
         private let underlying: Underlying
         private let yieldEvent: @Sendable (ProviderEvent) -> Void

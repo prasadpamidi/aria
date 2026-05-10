@@ -186,12 +186,11 @@
             // Build the typed FM tools. Each factory is invoked with a
             // closure that yields events into this stream's
             // continuation, so per-call `toolCallExecuted` events flow
-            // back through the agent layer. We deliberately do *not*
-            // bridge `executableTools` through `AriaBridgeTool` — the
-            // probe (see `FoundationModelsToolProbe`) confirmed that
-            // FoundationModels' iOS 26 tool router never resolves to
-            // `GeneratedContent`-typed `Arguments`. Registering them
-            // would only make the model mimic tool-call syntax in text.
+            // back through the agent layer. The agent's
+            // `executableTools` is intentionally unused — FM's iOS 26
+            // tool router only resolves compile-time `@Generable`
+            // arguments, so tools must reach the session through
+            // `typedTools`.
             let fmTools: [any FoundationModels.Tool] = self.typedTools.map { factory in
                 factory { event in continuation.yield(event) }
             }
@@ -237,7 +236,7 @@
     extension ProviderCapabilities {
         /// Default capabilities for `FoundationModelsProvider`.
         /// Tool support resolves inside the model session via the
-        /// `AriaBridgeTool` adapter; the provider emits
+        /// typed-bridge adapter; the provider emits
         /// `ProviderEvent.toolCallExecuted` once each tool returns so the
         /// agent layer surfaces equivalent events to consumers.
         public static let foundationModelsDefault = ProviderCapabilities(

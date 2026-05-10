@@ -14,9 +14,8 @@ import FoundationModels
 /// 3. On a future turn, `RAGMiddleware` retrieves the stored fact and
 ///    injects it as context before the next provider call.
 ///
-/// Conforms to `GenerableTool` so it routes through
-/// `TypedAriaBridgeTool` — the only path FoundationModels' iOS 26 tool
-/// router actually invokes.
+/// Conforms to `GenerableTool` so the FoundationModels tool router can
+/// resolve calls against the typed `Input` struct.
 struct RememberTool: GenerableTool {
     @Generable
     struct Input: Codable {
