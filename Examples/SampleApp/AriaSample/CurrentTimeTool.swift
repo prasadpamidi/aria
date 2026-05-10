@@ -7,14 +7,9 @@ import FoundationModels
 
 /// A trivial tool the agent can call to fetch the current time.
 ///
-/// Demonstrates the end-to-end agent + tool flow on FoundationModels:
-/// 1. The model decides to call `current_time` based on the user prompt.
-/// 2. `FoundationModelsProvider`'s `TypedAriaBridgeTool` adapter
-///    dispatches to this `Tool.call` implementation — possible because
-///    `Input` is `@Generable`, which is what the iOS 26 system model's
-///    tool router actually resolves against.
-/// 3. The result is fed back into the session and the model
-///    incorporates the time into its reply.
+/// `Input` is `@Generable` so the FoundationModels tool router can
+/// resolve calls against it; the same struct's `Codable` conformance
+/// keeps the tool usable against non-Apple providers too.
 struct CurrentTimeTool: GenerableTool {
     @Generable
     struct Input: Codable {
@@ -31,7 +26,7 @@ struct CurrentTimeTool: GenerableTool {
     static let description = """
     Returns the current time in ISO-8601 format. Optionally accepts an \
     IANA timezone identifier (e.g. "America/Los_Angeles"); defaults to \
-    UTC when omitted.
+    the device's current timezone when omitted.
     """
 
     static var inputSchema: JSONSchema {
@@ -46,8 +41,7 @@ struct CurrentTimeTool: GenerableTool {
     }
 
     func call(_ input: Input, context _: ToolContext) async throws -> Output {
-        let identifier = input.timezone ?? "UTC"
-        let timeZone = TimeZone(identifier: identifier) ?? TimeZone(identifier: "UTC") ?? .gmt
+        let timeZone = input.timezone.flatMap(TimeZone.init(identifier:)) ?? .current
         let formatter = ISO8601DateFormatter()
         formatter.timeZone = timeZone
         formatter.formatOptions = [.withInternetDateTime]
