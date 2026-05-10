@@ -1,4 +1,5 @@
 import Foundation
+import Tracing
 
 // MARK: - MemoryItem
 
@@ -112,17 +113,22 @@ public struct DefaultMemoryStore: MemoryStore {
         _ item: MemoryItem,
         namespace: [String]
     ) async throws -> MemoryRef {
-        let vector = try await self.embedder.embed(item.content)
-        let metadata = self.augment(item.metadata, withNamespace: namespace, item: item)
-        try await self.store.upsert([
-            VectorItem(
-                id: item.id,
-                vector: vector,
-                content: item.content,
-                metadata: metadata
-            ),
-        ])
-        return MemoryRef(id: item.id, namespace: namespace)
+        try await withSpan(AriaSemConv.Span.memoryRemember, ofKind: .internal) { span in
+            span.attributes[AriaSemConv.Aria.memoryNamespace] = namespace
+            span.attributes[AriaSemConv.Aria.memoryItemId] = item.id
+            AriaMetrics.memoryRemembersTotal.increment()
+            let vector = try await self.embedder.embed(item.content)
+            let metadata = self.augment(item.metadata, withNamespace: namespace, item: item)
+            try await self.store.upsert([
+                VectorItem(
+                    id: item.id,
+                    vector: vector,
+                    content: item.content,
+                    metadata: metadata
+                ),
+            ])
+            return MemoryRef(id: item.id, namespace: namespace)
+        }
     }
 
     public func recall(
@@ -131,18 +137,24 @@ public struct DefaultMemoryStore: MemoryStore {
         topK: Int,
         filter: VectorFilter?
     ) async throws -> [MemoryMatch] {
-        let vector = try await self.embedder.embed(query)
-        let combined = self.combinedFilter(namespace: namespace, additional: filter)
-        let matches = try await self.store.search(
-            query: vector,
-            topK: topK,
-            filter: combined
-        )
-        return matches.map { match in
-            MemoryMatch(
-                item: Self.memoryItem(from: match),
-                score: match.score
+        try await withSpan(AriaSemConv.Span.memoryRecall, ofKind: .internal) { span in
+            span.attributes[AriaSemConv.Aria.memoryNamespace] = namespace
+            span.attributes[AriaSemConv.Aria.memoryTopK] = Int64(topK)
+            AriaMetrics.memoryRecallsTotal.increment()
+            let vector = try await self.embedder.embed(query)
+            let combined = self.combinedFilter(namespace: namespace, additional: filter)
+            let matches = try await self.store.search(
+                query: vector,
+                topK: topK,
+                filter: combined
             )
+            span.attributes[AriaSemConv.Aria.memoryMatches] = Int64(matches.count)
+            return matches.map { match in
+                MemoryMatch(
+                    item: Self.memoryItem(from: match),
+                    score: match.score
+                )
+            }
         }
     }
 

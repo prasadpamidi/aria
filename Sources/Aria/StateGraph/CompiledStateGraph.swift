@@ -1,4 +1,5 @@
 import Foundation
+import Tracing
 
 // MARK: - CompiledStateGraph
 
@@ -82,11 +83,15 @@ public struct CompiledStateGraph<State: Sendable & Codable>: Sendable {
     ) -> AsyncThrowingStream<StateGraphEvent<State>, any Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                await self.runHandlingErrors(
-                    initial: initial,
-                    options: options,
-                    continuation: continuation
-                )
+                await withSpan(AriaSemConv.Span.stateGraphRun, ofKind: .internal) { span in
+                    span.attributes[AriaSemConv.Aria.stateGraphReducerCount] =
+                        Int64(self.reducers.count)
+                    await self.runHandlingErrors(
+                        initial: initial,
+                        options: options,
+                        continuation: continuation
+                    )
+                }
             }
             continuation.onTermination = { _ in task.cancel() }
         }
@@ -131,12 +136,15 @@ public struct CompiledStateGraph<State: Sendable & Codable>: Sendable {
         )
         return AsyncThrowingStream { continuation in
             let task = Task {
-                await self.resumeHandlingErrors(
-                    threadId: threadId,
-                    checkpointer: checkpointer,
-                    options: resumeOptions,
-                    continuation: continuation
-                )
+                await withSpan(AriaSemConv.Span.stateGraphResume, ofKind: .internal) { span in
+                    span.attributes[AriaSemConv.Aria.threadId] = threadId
+                    await self.resumeHandlingErrors(
+                        threadId: threadId,
+                        checkpointer: checkpointer,
+                        options: resumeOptions,
+                        continuation: continuation
+                    )
+                }
             }
             continuation.onTermination = { _ in task.cancel() }
         }

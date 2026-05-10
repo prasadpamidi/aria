@@ -1,4 +1,5 @@
 import Foundation
+import Tracing
 
 // MARK: - CompiledStateGraph + parallel/reducer helpers
 
@@ -84,10 +85,14 @@ extension CompiledStateGraph {
         state: State,
         continuation: AsyncThrowingStream<StateGraphEvent<State>, any Error>.Continuation
     ) async throws -> State {
-        continuation.yield(.nodeStart(name: node.name, state: state))
-        let nextState = try await node.run(state)
-        continuation.yield(.nodeEnd(name: node.name, state: nextState))
-        return nextState
+        try await withSpan(AriaSemConv.Span.stateGraphNode, ofKind: .internal) { span in
+            span.attributes[AriaSemConv.Aria.stateGraphNode] = node.name
+            AriaMetrics.stateGraphNodeExecutions(name: node.name).increment()
+            continuation.yield(.nodeStart(name: node.name, state: state))
+            let nextState = try await node.run(state)
+            continuation.yield(.nodeEnd(name: node.name, state: nextState))
+            return nextState
+        }
     }
 
     /// Fan-out execution: run each branch node concurrently with the
@@ -100,12 +105,15 @@ extension CompiledStateGraph {
         input: State,
         continuation: AsyncThrowingStream<StateGraphEvent<State>, any Error>.Continuation
     ) async throws -> State {
-        let outputs = try await self.runBranchesInParallel(
-            branches: branches,
-            input: input,
-            continuation: continuation
-        )
-        return self.foldOutputs(outputs, input: input)
+        try await withSpan(AriaSemConv.Span.stateGraphParallel, ofKind: .internal) { span in
+            span.attributes[AriaSemConv.Aria.stateGraphParallelBranches] = branches
+            let outputs = try await self.runBranchesInParallel(
+                branches: branches,
+                input: input,
+                continuation: continuation
+            )
+            return self.foldOutputs(outputs, input: input)
+        }
     }
 
     // MARK: Private

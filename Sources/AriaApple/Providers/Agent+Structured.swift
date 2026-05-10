@@ -2,6 +2,7 @@
     import Aria
     import Foundation
     import FoundationModels
+    import Tracing
 
     // MARK: - Agent + structured response
 
@@ -33,11 +34,21 @@
         where Content.PartiallyGenerated: Sendable {
             AsyncThrowingStream { continuation in
                 let task = Task {
-                    await self.runStructuredHandlingErrors(
-                        input: input,
-                        type: type,
-                        continuation: continuation
-                    )
+                    await withSpan(AriaSemConv.Span.agentRespond, ofKind: .internal) { span in
+                        span.attributes[AriaSemConv.GenAI.system] =
+                            self.config.provider.capabilities.modelIdentifier
+                        span.attributes[AriaSemConv.GenAI.requestModel] =
+                            self.config.provider.capabilities.modelIdentifier
+                        span.attributes[AriaSemConv.GenAI.operationName] = "structured_output"
+                        if let threadId = self.config.threadId {
+                            span.attributes[AriaSemConv.Aria.threadId] = threadId
+                        }
+                        await self.runStructuredHandlingErrors(
+                            input: input,
+                            type: type,
+                            continuation: continuation
+                        )
+                    }
                 }
                 continuation.onTermination = { _ in task.cancel() }
             }

@@ -1,4 +1,5 @@
 import Foundation
+import Tracing
 
 // MARK: - Tool execution
 
@@ -63,47 +64,71 @@ extension Agent {
         call: ToolCall,
         continuation: AsyncThrowingStream<AgentEvent, any Error>.Continuation
     ) async throws -> Message {
+        try await withSpan(AriaSemConv.Span.toolExecute, ofKind: .internal) { span in
+            span.attributes[AriaSemConv.GenAI.toolName] = call.name
+            span.attributes[AriaSemConv.GenAI.toolCallId] = call.id
+            return try await self.executeOneSpanned(
+                call: call,
+                continuation: continuation,
+                span: span
+            )
+        }
+    }
+
+    private func executeOneSpanned(
+        call: ToolCall,
+        continuation: AsyncThrowingStream<AgentEvent, any Error>.Continuation,
+        span: Span
+    ) async throws -> Message {
         guard let tool = config.tool(named: call.name) else {
             throw AgentError.toolNotFound(call.name)
         }
 
         continuation.yield(.toolExecutionStart(callId: call.id))
+        let result = await self.invokeTool(tool: tool, call: call)
+        continuation.yield(.toolExecutionEnd(callId: call.id, result: result))
 
+        AriaMetrics.toolExecutionsTotal(name: call.name, isError: result.isError).increment()
+        AriaMetrics.toolDuration(name: call.name)
+            .record(Self.seconds(in: result.duration))
+        if result.isError {
+            span.setStatus(SpanStatus(code: .error))
+        }
+        return Message.tool(callId: call.id, text: Self.renderToolResult(result))
+    }
+
+    /// Invoke `tool.invoke` under the configured timeout and turn any
+    /// thrown error into an `isError: true` `ToolExecutionResult`.
+    private func invokeTool(
+        tool: AnyTool,
+        call: ToolCall
+    ) async -> ToolExecutionResult {
         let context = ToolContext(runId: UUID())
         let started = ContinuousClock.now
-        let result: ToolExecutionResult
-
         do {
             let output = try await Self.runWithTimeout(
                 timeout: self.config.toolTimeout,
                 operation: { try await tool.invoke(call.arguments, context) }
             )
-            let duration = ContinuousClock.now - started
-            result = ToolExecutionResult(
+            return ToolExecutionResult(
                 output: output,
                 isError: false,
-                duration: duration
-            )
-        } catch let error as AgentError {
-            let duration = ContinuousClock.now - started
-            result = ToolExecutionResult(
-                output: .object(["error": .string(String(describing: error))]),
-                isError: true,
-                duration: duration
+                duration: ContinuousClock.now - started
             )
         } catch {
-            let duration = ContinuousClock.now - started
-            result = ToolExecutionResult(
+            return ToolExecutionResult(
                 output: .object(["error": .string(String(describing: error))]),
                 isError: true,
-                duration: duration
+                duration: ContinuousClock.now - started
             )
         }
+    }
 
-        continuation.yield(.toolExecutionEnd(callId: call.id, result: result))
-
-        let resultText = Self.renderToolResult(result)
-        return Message.tool(callId: call.id, text: resultText)
+    /// Convert a `Duration` to a `Double` second count for metrics
+    /// recording. `Duration.components` returns `(seconds, attoseconds)`.
+    private static func seconds(in duration: Duration) -> Double {
+        let components = duration.components
+        return Double(components.seconds) + Double(components.attoseconds) * 1e-18
     }
 
     private static func renderToolResult(_ result: ToolExecutionResult) -> String {
