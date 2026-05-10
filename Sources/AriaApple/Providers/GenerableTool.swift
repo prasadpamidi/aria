@@ -78,6 +78,8 @@
         ) {
             self.underlying = underlying
             self.yieldEvent = yieldEvent
+            self.name = Underlying.name
+            self.description = Underlying.description
         }
 
         // MARK: Internal
@@ -85,13 +87,10 @@
         typealias Arguments = Underlying.Input
         typealias Output = String
 
-        var name: String {
-            Underlying.name
-        }
-
-        var description: String {
-            Underlying.description
-        }
+        // Stored — matches the shape FoundationModels' WWDC sample uses
+        // (and the probe's NativeProbeTool that is confirmed to fire).
+        let name: String
+        let description: String
 
         func call(arguments: Underlying.Input) async throws -> String {
             Self.logger.debug(
