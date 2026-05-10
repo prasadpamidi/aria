@@ -58,9 +58,15 @@ struct ContentView: View {
         .background(Color(.secondarySystemBackground))
     }
 
-    private var headerActions: some View {
+    @ViewBuilder private var headerActions: some View {
         Button("Clear") { Task { await self.clearHistory() } }
             .buttonStyle(.bordered).controlSize(.small).disabled(self.isStreaming)
+        #if canImport(FoundationModels)
+            if #available(iOS 26.0, macOS 26.0, *) {
+                Button("Suggest") { Task { await self.runSuggest() } }
+                    .buttonStyle(.bordered).controlSize(.small).disabled(self.isStreaming)
+            }
+        #endif
     }
 
     private var messageList: some View {
@@ -294,6 +300,63 @@ struct ContentView: View {
         self.transcript[lastIndex].content = text
     }
 }
+
+// MARK: - Structured response demo
+
+#if canImport(FoundationModels)
+    extension ContentView {
+        /// Stream an `ActivitySuggestion` from `agent.respond(_:as:)`,
+        /// rendering each partial snapshot in place so the user sees the
+        /// model fill in fields incrementally.
+        @available(iOS 26.0, macOS 26.0, *)
+        @MainActor
+        func runSuggest() async {
+            self.isStreaming = true
+            defer { isStreaming = false }
+            self.transcript.append(.user("Suggest a fun activity for me today."))
+            self.transcript.append(.assistant(""))
+            do {
+                let stream = self.makeAgent().respond(
+                    .message(.user("Suggest a fun activity I could do today.")),
+                    as: ActivitySuggestion.self
+                )
+                for try await event in stream {
+                    switch event {
+                    case let .partial(snapshot):
+                        self.updateLastAssistant(text: Self.render(snapshot))
+                    case .toolCallExecuted:
+                        break
+                    case let .finish(suggestion):
+                        self.updateLastAssistant(text: Self.render(suggestion))
+                        return
+                    }
+                }
+            } catch {
+                self.updateLastAssistant(text: "Error: \(error)")
+            }
+        }
+
+        @available(iOS 26.0, macOS 26.0, *)
+        private static func render(
+            _ partial: ActivitySuggestion.PartiallyGenerated
+        ) -> String {
+            let title = partial.title ?? "…"
+            let summary = partial.summary ?? "…"
+            let steps = partial.steps?.enumerated()
+                .map { "  \($0.offset + 1). \($0.element)" }
+                .joined(separator: "\n") ?? "  …"
+            return "🎯 \(title)\n\n\(summary)\n\nSteps:\n\(steps)"
+        }
+
+        @available(iOS 26.0, macOS 26.0, *)
+        private static func render(_ suggestion: ActivitySuggestion) -> String {
+            let steps = suggestion.steps.enumerated()
+                .map { "  \($0.offset + 1). \($0.element)" }
+                .joined(separator: "\n")
+            return "🎯 \(suggestion.title)\n\n\(suggestion.summary)\n\nSteps:\n\(steps)"
+        }
+    }
+#endif
 
 // MARK: - History controls
 

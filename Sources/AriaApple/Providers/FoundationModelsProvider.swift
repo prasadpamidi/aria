@@ -58,6 +58,11 @@
 
         // MARK: Internal
 
+        // Read by extensions in sibling files (e.g.
+        // `FoundationModelsStructured.swift`).
+        let defaultInstructions: String?
+        let typedTools: [FoundationModelsToolFactory]
+
         /// Pull the new-turn prompt out of the message list. Returns the
         /// text that should be sent via `streamResponse(to:)` plus the
         /// remaining history that becomes the `Transcript`.
@@ -108,12 +113,7 @@
             return Transcript(entries: entries)
         }
 
-        // MARK: Private
-
-        private let defaultInstructions: String?
-        private let typedTools: [FoundationModelsToolFactory]
-
-        private static func checkAvailability() throws {
+        static func checkAvailability() throws {
             let availability = SystemLanguageModel.default.availability
             switch availability {
             case .available:
@@ -130,6 +130,8 @@
                 )
             }
         }
+
+        // MARK: Private
 
         // Transcript construction helpers live in
         // FoundationModelsTranscript.swift to keep this type body small.
