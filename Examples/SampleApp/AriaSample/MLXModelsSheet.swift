@@ -1,3 +1,4 @@
+#if canImport(AriaMLX)
 import AriaMLX
 import Foundation
 import SwiftUI
@@ -204,3 +205,4 @@ private func format(bytes: Int64) -> String {
     formatter.countStyle = .file
     return formatter.string(fromByteCount: bytes)
 }
+#endif

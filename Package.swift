@@ -89,10 +89,31 @@ let package = Package(
             name: "AriaMLX",
             dependencies: [
                 "Aria",
-                .product(name: "MLXLLM", package: "mlx-swift-lm"),
-                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
-                .product(name: "MLXLMHuggingFace", package: "swift-huggingface-mlx"),
-                .product(name: "MLXLMTransformers", package: "swift-transformers-mlx"),
+                // mlx-swift's C++ backend needs Apple's Accelerate /
+                // Metal headers — it can't build on Linux. Gate every
+                // MLX product on Apple platforms; AriaMLX's own
+                // sources are wrapped in `#if canImport(MLXLLM)` so
+                // the target builds (empty) on Linux.
+                .product(
+                    name: "MLXLLM",
+                    package: "mlx-swift-lm",
+                    condition: .when(platforms: [.iOS, .macOS, .visionOS])
+                ),
+                .product(
+                    name: "MLXLMCommon",
+                    package: "mlx-swift-lm",
+                    condition: .when(platforms: [.iOS, .macOS, .visionOS])
+                ),
+                .product(
+                    name: "MLXLMHuggingFace",
+                    package: "swift-huggingface-mlx",
+                    condition: .when(platforms: [.iOS, .macOS, .visionOS])
+                ),
+                .product(
+                    name: "MLXLMTransformers",
+                    package: "swift-transformers-mlx",
+                    condition: .when(platforms: [.iOS, .macOS, .visionOS])
+                ),
             ],
             path: "Sources/AriaMLX"
         ),
