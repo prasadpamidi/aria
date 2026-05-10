@@ -2,6 +2,7 @@
     import Aria
     import Foundation
     import FoundationModels
+    import os
 
     // MARK: - Schema translator
 
@@ -176,7 +177,23 @@
         let description: String
         let parameters: GenerationSchema
 
+        /// Hide the schema from the textual instructions FoundationModels
+        /// builds for the model. The default (true) caused the system
+        /// model to mimic the rendered "ToolName: arguments" format in
+        /// its responses (writing "Current_time: 10:00 AM" instead of
+        /// invoking the tool). With this off, the schema lives only in
+        /// the runtime tool registration; the model is steered to invoke
+        /// rather than narrate.
+        var includesSchemaInInstructions: Bool {
+            false
+        }
+
         func call(arguments: GeneratedContent) async throws -> String {
+            // Diagnostic: confirms the bridge is actually reached when
+            // FoundationModels decides to call this tool. Visible in the
+            // Xcode debug console under the "FoundationModelsBridge"
+            // category.
+            Self.logger.debug("AriaBridgeTool.call invoked: name=\(self.name, privacy: .public)")
             let argsValue = try Self.decodeArguments(from: arguments)
             // FoundationModels' `GenerationID` does not surface a stable
             // string form, so we mint a UUID per call. The id only needs
@@ -214,6 +231,11 @@
         }
 
         // MARK: Private
+
+        private static let logger = Logger(
+            subsystem: "com.aria.AriaApple",
+            category: "FoundationModelsBridge"
+        )
 
         // MARK: - Aria-side state
 

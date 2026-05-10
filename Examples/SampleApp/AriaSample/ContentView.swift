@@ -45,17 +45,28 @@ struct ContentView: View {
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Aria Sample")
-                    .font(.headline)
+                Text("Aria Sample").font(.headline)
                 Text("Aria \(AriaInfo.version)  ·  AriaApple \(AriaApple.version)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            self.headerActions
         }
         .padding(.horizontal)
         .padding(.vertical, 12)
         .background(Color(.secondarySystemBackground))
+    }
+
+    @ViewBuilder private var headerActions: some View {
+        Button("Clear") { Task { await self.clearHistory() } }
+            .buttonStyle(.bordered).controlSize(.small).disabled(self.isStreaming)
+        #if canImport(FoundationModels)
+            if #available(iOS 26.0, macOS 26.0, *) {
+                Button("Probe") { Task { await self.runProbe() } }
+                    .buttonStyle(.bordered).controlSize(.small).disabled(self.isStreaming)
+            }
+        #endif
     }
 
     private var messageList: some View {
@@ -188,15 +199,25 @@ struct ContentView: View {
         private func makeAgent() -> Agent {
             let memory = self.makeMemoryStore()
             let middlewares = self.makeMiddleware(memory: memory)
-            var tools: [AnyTool] = [AnyTool(CurrentTimeTool())]
+            // Register each tool once and harvest both the AnyTool (for
+            // the agent's portable list) and the typed FM factory (for
+            // the provider's tool router) from the same kit. This keeps
+            // the two lists in sync — the bridge is the only path FM's
+            // iOS 26 router actually fires.
+            var kits: [FoundationModelsToolKit] = [
+                registerFoundationModelsTool(CurrentTimeTool()),
+            ]
             if let memory {
-                tools.append(
-                    AnyTool(RememberTool(memoryStore: memory, namespace: Self.memoryNamespace))
-                )
+                kits.append(registerFoundationModelsTool(
+                    RememberTool(memoryStore: memory, namespace: Self.memoryNamespace)
+                ))
             }
+            let provider = FoundationModelsProvider(
+                typedTools: kits.map(\.factory)
+            )
             return Agent(config: AgentConfig(
-                provider: FoundationModelsProvider(),
-                tools: tools,
+                provider: provider,
+                tools: kits.map(\.anyTool),
                 systemPrompt: Self.systemPrompt(memoryEnabled: memory != nil),
                 threadId: Self.threadId,
                 middleware: middlewares
@@ -230,15 +251,20 @@ struct ContentView: View {
         }
 
         private static func systemPrompt(memoryEnabled: Bool) -> String {
+            // Keep this prompt about *behavior*, not tool routing. Naming
+            // tools in the prompt nudges the model to mimic that text
+            // pattern in its replies; the tool descriptions registered
+            // with the session already tell the model what each tool
+            // does and when to use it.
             var lines: [String] = [
                 "You are a concise, helpful assistant.",
-                "When the user asks about the current time or date, call the current_time tool.",
+                "Always use the tools you have access to when they are relevant — "
+                    + "never describe a tool call in your reply text.",
             ]
             if memoryEnabled {
                 lines.append(
-                    "When the user shares a durable preference, biographical fact, or "
-                        + "anything they will want you to remember in the future, call the "
-                        + "remember_fact tool with a single concise sentence."
+                    "Save anything the user wants you to remember about themselves "
+                        + "for future conversations."
                 )
             }
             return lines.joined(separator: " ")
@@ -274,6 +300,59 @@ struct ContentView: View {
         self.transcript[lastIndex].content = text
     }
 }
+
+// MARK: - History controls
+
+extension ContentView {
+    /// Wipe the chat thread and the on-screen transcript. Keeps the
+    /// vector store intact (long-lived facts shouldn't disappear with a
+    /// chat reset). Used to clear bad model patterns out of the history
+    /// that the FoundationModels transcript replays back to the model.
+    @MainActor
+    func clearHistory() async {
+        do {
+            try await self.storage.chatHistory.clear(threadId: Self.threadId)
+            self.transcript = []
+        } catch {
+            self.transcript = [.assistant("Could not clear history: \(error)")]
+        }
+    }
+}
+
+// MARK: - Probe
+
+#if canImport(FoundationModels)
+    extension ContentView {
+        /// Run the FoundationModels tool-routing probe and surface the
+        /// result as an inline assistant message. Used to determine
+        /// whether the model invokes our `AriaBridgeTool`
+        /// (DynamicGenerationSchema), the WWDC-style native
+        /// `@Generable` tool, or neither.
+        @available(iOS 26.0, macOS 26.0, *)
+        @MainActor
+        func runProbe() async {
+            self.isStreaming = true
+            defer { isStreaming = false }
+            self.transcript.append(.assistant("[Probe] running…"))
+            do {
+                let result = try await FoundationModelsToolProbe.run(
+                    prompt: "What time is it right now?"
+                )
+                let summary = """
+                [Probe result]
+                native @Generable fired: \(result.nativeFired)
+                AriaBridgeTool fired:    \(result.bridgeFired)
+
+                Model response:
+                \(result.response)
+                """
+                self.updateLastAssistant(text: summary)
+            } catch {
+                self.updateLastAssistant(text: "[Probe error] \(error)")
+            }
+        }
+    }
+#endif
 
 // MARK: - TranscriptItem
 
