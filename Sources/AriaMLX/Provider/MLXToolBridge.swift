@@ -21,7 +21,21 @@
             guard !tools.isEmpty else {
                 return nil
             }
-            return tools.map(self.toolSpec(from:))
+            return tools.map { Self.toolSpec(from: $0.definition) }
+        }
+
+        /// `ToolDefinition`-flavoured overload. The agent layer reaches
+        /// `LLMProvider` through the protocol method `stream(messages:
+        /// tools: options:)` whose `tools` parameter is `[ToolDefinition]`,
+        /// not `[AnyTool]`. That's all MLX needs — only the schema is
+        /// forwarded into the chat template; the agent layer keeps the
+        /// invocation closures and runs the tool once we yield a
+        /// `toolCallStart` / `toolCallEnd` pair.
+        static func toolSpecs(fromDefinitions definitions: [ToolDefinition]) -> [ToolSpec]? {
+            guard !definitions.isEmpty else {
+                return nil
+            }
+            return definitions.map(Self.toolSpec(from:))
         }
 
         // MARK: - MLX → Aria
@@ -44,11 +58,11 @@
         /// One `ToolSpec` for one Aria tool. Shape matches the OpenAI
         /// function-calling JSON schema; mlx-swift-lm's chat-template
         /// renderer maps it onto the model-specific format.
-        private static func toolSpec(from tool: AnyTool) -> ToolSpec {
-            let parameters = Self.parametersDictionary(from: tool.definition.inputSchema)
+        private static func toolSpec(from definition: ToolDefinition) -> ToolSpec {
+            let parameters = Self.parametersDictionary(from: definition.inputSchema)
             let function: [String: any Sendable] = [
-                "name": tool.definition.name,
-                "description": tool.definition.description,
+                "name": definition.name,
+                "description": definition.description,
                 "parameters": parameters,
             ]
             return [

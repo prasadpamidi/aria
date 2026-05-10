@@ -29,6 +29,7 @@
             for id: String,
             kind: MLXModelKind = .textOnly,
             revision: String = "main",
+            toolCallFormat: ToolCallFormat? = nil,
             onProgress: @Sendable @escaping (MLXDownloadProgress) -> Void = { _ in }
         ) async throws -> ModelContainer {
             if let existing = self.cached[id] {
@@ -43,6 +44,7 @@
                     kind: kind,
                     revision: revision,
                     useLatest: false,
+                    toolCallFormat: toolCallFormat,
                     onProgress: onProgress
                 )
             }

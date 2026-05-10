@@ -35,12 +35,21 @@
             catalog: [MLXModelCapabilities] = MLXModelCatalog.defaults,
             store: MLXModelStore = MLXModelStore(),
             downloader: MLXModelDownloader = MLXModelDownloader(),
-            diskManager: MLXModelDiskManager = MLXModelDiskManager()
+            diskManager: MLXModelDiskManager = MLXModelDiskManager(),
+            persistenceKey: String? = nil,
+            defaults: UserDefaults = .standard
         ) {
             self.catalog = catalog
             self.store = store
             self.downloader = downloader
             self.diskManager = diskManager
+            self.persistenceKey = persistenceKey
+            self.defaults = defaults
+            self.activeModelID = Self.restoreActiveID(
+                key: persistenceKey,
+                defaults: defaults,
+                diskManager: diskManager
+            )
         }
 
         // MARK: Public
@@ -78,9 +87,12 @@
         /// an `MLXProvider` bound to it. Setting to `nil` clears the
         /// selection. No download is triggered — call
         /// `download(id:)` first (or use the provided UI) to ensure
-        /// weights are on disk.
+        /// weights are on disk. When `persistenceKey` was set at
+        /// init, the choice is mirrored into `UserDefaults` so the
+        /// next launch restores it.
         public func setActiveModel(id: String?) {
             self.activeModelID = id
+            self.persist(id: id)
         }
 
         /// Build an `MLXProvider` for the active model.
@@ -113,12 +125,13 @@
             revision: String = "main",
             useLatest: Bool = false
         ) -> AsyncThrowingStream<MLXDownloadProgress, any Error> {
-            let kind = self.entry(for: id)?.kind ?? .textOnly
+            let entry = self.entry(for: id)
             return self.downloader.progressStream(
                 id: id,
-                kind: kind,
+                kind: entry?.kind ?? .textOnly,
                 revision: revision,
-                useLatest: useLatest
+                useLatest: useLatest,
+                toolCallFormat: entry?.toolCallFormat
             )
         }
 
@@ -130,12 +143,13 @@
             revision: String = "main",
             useLatest: Bool = false
         ) async throws {
-            let kind = self.entry(for: id)?.kind ?? .textOnly
+            let entry = self.entry(for: id)
             _ = try await self.downloader.loadContainer(
                 id: id,
-                kind: kind,
+                kind: entry?.kind ?? .textOnly,
                 revision: revision,
-                useLatest: useLatest
+                useLatest: useLatest,
+                toolCallFormat: entry?.toolCallFormat
             )
         }
 
@@ -160,6 +174,49 @@
             await self.store.unload(id: id)
             if self.activeModelID == id {
                 self.activeModelID = nil
+                self.persist(id: nil)
+            }
+        }
+
+        // MARK: Private
+
+        private let persistenceKey: String?
+        private let defaults: UserDefaults
+
+        /// Pull the saved id, then verify the model directory still
+        /// exists on disk. iOS may evict the cache or the user may
+        /// have deleted the model since last launch — in either case
+        /// fall back to `nil` (FoundationModels via the consumer's
+        /// usual fallback) and clear the stale value.
+        private static func restoreActiveID(
+            key: String?,
+            defaults: UserDefaults,
+            diskManager: MLXModelDiskManager
+        ) -> String? {
+            guard let key,
+                  let stored = defaults.string(forKey: key),
+                  !stored.isEmpty else {
+                return nil
+            }
+            do {
+                if try diskManager.find(id: stored) != nil {
+                    return stored
+                }
+            } catch {
+                // Fall through; treat unreadable cache as "missing".
+            }
+            defaults.removeObject(forKey: key)
+            return nil
+        }
+
+        private func persist(id: String?) {
+            guard let key = self.persistenceKey else {
+                return
+            }
+            if let id {
+                self.defaults.set(id, forKey: key)
+            } else {
+                self.defaults.removeObject(forKey: key)
             }
         }
     }

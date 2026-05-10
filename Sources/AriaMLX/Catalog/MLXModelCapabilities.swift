@@ -1,5 +1,6 @@
 #if canImport(MLXLMCommon)
     import Foundation
+    import MLXLMCommon
 
     // MARK: - MLXModelCapabilities
 
@@ -32,7 +33,8 @@
             contextWindow: Int,
             supportsTools: Bool,
             supportsVision: Bool = false,
-            recommendedRAMGigabytes: Int = 4
+            recommendedRAMGigabytes: Int = 4,
+            toolCallFormat: ToolCallFormat? = nil
         ) {
             self.id = id
             self.displayName = displayName
@@ -43,6 +45,7 @@
             self.supportsTools = supportsTools
             self.supportsVision = supportsVision
             self.recommendedRAMGigabytes = recommendedRAMGigabytes
+            self.toolCallFormat = toolCallFormat
         }
 
         // MARK: Public
@@ -85,5 +88,29 @@
         /// inference of this model. Used by the sample app to grey out
         /// models that exceed device constraints.
         public let recommendedRAMGigabytes: Int
+
+        /// Override `mlx-swift-lm`'s tool-call format inference. The
+        /// library only auto-detects a handful of `model_type`
+        /// strings — Qwen 2.5 (`qwen2`), Qwen 2.5 VL
+        /// (`qwen2_5_vl`), Gemma 2 (`gemma2`), and Gemma 4 (`gemma4`)
+        /// all return `nil` from `ToolCallFormat.infer`. Without an
+        /// override, tool-call output gets emitted as plain text and
+        /// the agent never executes anything. Set this to the format
+        /// the model's chat template actually uses (e.g. `.json` for
+        /// Hermes-style `<tool_call>{...}</tool_call>`). For models
+        /// whose format isn't covered by any built-in parser
+        /// (Gemma 4), leave `nil` and let the AriaMLX-side stream
+        /// parser handle it via family-based routing.
+        public let toolCallFormat: ToolCallFormat?
+
+        /// `true` for models in the Gemma 4 family. Their chat
+        /// template emits a tool-call format
+        /// (`<|tool_call>call:NAME{...}<tool_call|>`) that no
+        /// `mlx-swift-lm` parser handles, so `MLXProvider` routes
+        /// raw `.chunk` text through `Gemma4ToolCallStreamParser`
+        /// instead of relying on `Generation.toolCall` events.
+        public var usesGemma4ToolFormat: Bool {
+            self.family == "gemma-4"
+        }
     }
 #endif

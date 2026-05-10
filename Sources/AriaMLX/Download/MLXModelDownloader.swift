@@ -89,15 +89,25 @@
             kind: MLXModelKind = .textOnly,
             revision: String = "main",
             useLatest: Bool = false,
+            toolCallFormat: ToolCallFormat? = nil,
             onProgress: @Sendable @escaping (MLXDownloadProgress) -> Void = { _ in }
         ) async throws -> ModelContainer {
             let factory: any GenericModelFactory<ModelContext, ModelContainer> = (kind == .vision)
                 ? VLMModelFactory.shared
                 : LLMModelFactory.shared
+            // Override mlx-swift-lm's `ToolCallFormat.infer` when the
+            // catalog knows the model's chat-template format (Qwen 2.5,
+            // Qwen 2.5 VL, Gemma 2, etc. report `model_type` strings
+            // the inferrer doesn't cover).
+            let configuration = ModelConfiguration(
+                id: id,
+                revision: revision,
+                toolCallFormat: toolCallFormat
+            )
             return try await factory.loadContainer(
                 from: self.hubClient,
                 using: TransformersLoader(),
-                configuration: ModelConfiguration(id: id, revision: revision),
+                configuration: configuration,
                 useLatest: useLatest,
                 progressHandler: { progress in
                     onProgress(MLXDownloadProgress(progress: progress))
@@ -114,7 +124,8 @@
             id: String,
             kind: MLXModelKind = .textOnly,
             revision: String = "main",
-            useLatest: Bool = false
+            useLatest: Bool = false,
+            toolCallFormat: ToolCallFormat? = nil
         ) -> AsyncThrowingStream<MLXDownloadProgress, any Error> {
             AsyncThrowingStream { continuation in
                 let task = Task {
@@ -124,6 +135,7 @@
                             kind: kind,
                             revision: revision,
                             useLatest: useLatest,
+                            toolCallFormat: toolCallFormat,
                             onProgress: { tick in continuation.yield(tick) }
                         )
                         continuation.finish()
