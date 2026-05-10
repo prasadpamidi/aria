@@ -274,9 +274,16 @@ final class AgentTests: XCTestCase {
     func testCancellationStopsAgent() async throws {
         let provider = MockLLMProvider(scenes: [.text("hi")])
         let agent = Agent(config: AgentConfig(provider: provider))
+        // Pull the stream out before constructing the Task so we don't
+        // capture `self` in a sending closure (Swift 6 strict concurrency).
+        let stream = agent.stream(.message(.user("hi")))
 
         let task = Task {
-            try await self.collect(agent.stream(.message(.user("hi"))))
+            var events: [AgentEvent] = []
+            for try await event in stream {
+                events.append(event)
+            }
+            return events
         }
         task.cancel()
 
