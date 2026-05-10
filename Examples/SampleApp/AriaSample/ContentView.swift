@@ -1,5 +1,7 @@
 import Aria
+import AriaMLX
 import AriaApple
+import PhotosUI
 import SwiftUI
 
 #if canImport(FoundationModels)
@@ -60,6 +62,10 @@ struct ContentView: View {
     @State private var sessionRecorder = SessionRecorder()
     @State private var shareItem: SessionShareItem?
     @State private var appState = AppState()
+    @State private var pickedImage: PhotosPickerItem?
+    /// JPEG data for the image the user attached to the next message.
+    /// Cleared once the message is sent.
+    @State private var pendingImageData: Data?
 
     private let storage: GRDBStorage
 
@@ -161,22 +167,97 @@ struct ContentView: View {
     }
 
     private var inputBar: some View {
-        HStack(spacing: 8) {
-            TextField("Ask anything…", text: self.$input, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...4)
-                .disabled(self.isStreaming)
-
-            Button {
-                Task { await self.send() }
-            } label: {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.title2)
+        VStack(spacing: 6) {
+            if self.pendingImageData != nil {
+                self.pendingImagePreview
             }
-            .disabled(self.input.trimmingCharacters(in: .whitespaces).isEmpty || self.isStreaming)
+            HStack(spacing: 8) {
+                if self.activeProviderSupportsVision {
+                    PhotosPicker(
+                        selection: self.$pickedImage,
+                        matching: .images,
+                        photoLibrary: .shared()
+                    ) {
+                        Image(systemName: "paperclip")
+                            .font(.title3)
+                    }
+                    .disabled(self.isStreaming)
+                }
+                TextField("Ask anything…", text: self.$input, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+                    .lineLimit(1...4)
+                    .disabled(self.isStreaming)
+
+                Button {
+                    Task { await self.send() }
+                } label: {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2)
+                }
+                .disabled(self.canSend == false)
+            }
         }
         .padding()
         .background(Color(.secondarySystemBackground))
+        .onChange(of: self.pickedImage) { _, newValue in
+            Task { await self.loadPickedImage(newValue) }
+        }
+    }
+
+    @ViewBuilder
+    private var pendingImagePreview: some View {
+        if let data = pendingImageData, let uiImage = UIImage(data: data) {
+            HStack {
+                Image(uiImage: uiImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 56, height: 56)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                Text("Image attached")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button(role: .destructive) {
+                    self.pendingImageData = nil
+                    self.pickedImage = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private var canSend: Bool {
+        if self.isStreaming { return false }
+        let hasText = !self.input.trimmingCharacters(in: .whitespaces).isEmpty
+        return hasText || self.pendingImageData != nil
+    }
+
+    /// `true` when the currently-active provider can actually consume
+    /// images. We hide the photo-picker button otherwise so users
+    /// don't attach an image that would be silently dropped.
+    private var activeProviderSupportsVision: Bool {
+        #if canImport(AriaMLX)
+            if let id = self.appState.selectedMLXModelID,
+               let entry = MLXModelCatalog.entry(for: id) {
+                return entry.supportsVision
+            }
+        #endif
+        return false
+    }
+
+    @MainActor
+    private func loadPickedImage(_ item: PhotosPickerItem?) async {
+        guard let item else {
+            self.pendingImageData = nil
+            return
+        }
+        do {
+            self.pendingImageData = try await item.loadTransferable(type: Data.self)
+        } catch {
+            self.pendingImageData = nil
+        }
     }
 
     private static func transcriptItem(from message: Message) -> TranscriptItem? {
@@ -190,22 +271,34 @@ struct ContentView: View {
     @MainActor
     private func send() async {
         let trimmed = self.input.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else {
+        let attached = self.pendingImageData
+        guard !trimmed.isEmpty || attached != nil else {
             return
         }
 
-        let userMessage = trimmed
-        self.transcript.append(.user(userMessage))
+        let displayText = trimmed.isEmpty ? "[image]" : trimmed
+        self.transcript.append(.user(displayText))
         self.input = ""
+        self.pendingImageData = nil
+        self.pickedImage = nil
         self.isStreaming = true
         defer { isStreaming = false }
 
         self.transcript.append(.assistant(""))
+        let userMessage = Self.buildUserMessage(text: trimmed, image: attached)
         await self.runAgent(userMessage: userMessage)
     }
 
+    private static func buildUserMessage(text: String, image: Data?) -> Message {
+        if let image {
+            let imageContent = ImageContent(source: .data(image, mimeType: "image/jpeg"))
+            return Message.user(text, images: [imageContent])
+        }
+        return Message.user(text)
+    }
+
     @MainActor
-    private func runAgent(userMessage: String) async {
+    private func runAgent(userMessage: Message) async {
         #if canImport(FoundationModels)
             if #available(iOS 26.0, macOS 26.0, *) {
                 await self.streamWithAgent(userMessage: userMessage)
@@ -220,12 +313,12 @@ struct ContentView: View {
     #if canImport(FoundationModels)
         @available(iOS 26.0, macOS 26.0, *)
         @MainActor
-        private func streamWithAgent(userMessage: String) async {
+        private func streamWithAgent(userMessage: Message) async {
             self.memoryProbe.lastRecalled = []
             let agent = self.makeAgent()
             var assistantText = ""
             do {
-                for try await event in agent.stream(.message(.user(userMessage))) {
+                for try await event in agent.stream(.message(userMessage)) {
                     switch event {
                     case let .textDelta(chunk):
                         assistantText += chunk
