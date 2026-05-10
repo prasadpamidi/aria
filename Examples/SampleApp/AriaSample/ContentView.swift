@@ -30,6 +30,11 @@ struct ContentView: View {
         .sheet(isPresented: self.$memoriesSheetShown) {
             MemoriesSheet(storage: self.storage, namespace: Self.memoryNamespace)
         }
+        .sheet(isPresented: self.$mlxModelsSheetShown) {
+            #if canImport(AriaMLX)
+                MLXModelsSheet(appState: self.appState)
+            #endif
+        }
         .sheet(item: self.$shareItem) { item in
             ShareSheet(items: [item.url])
         }
@@ -48,11 +53,13 @@ struct ContentView: View {
     /// injected before the model's reply.
     @State private var memoryProbe = MemoryProbe()
     @State private var memoriesSheetShown = false
+    @State private var mlxModelsSheetShown = false
     /// Single recorder threaded into both the chat agent and the
     /// state-graph demo so a single "Share session" tap exports a
     /// bundle covering everything that ran in this session.
     @State private var sessionRecorder = SessionRecorder()
     @State private var shareItem: SessionShareItem?
+    @State private var appState = AppState()
 
     private let storage: GRDBStorage
 
@@ -62,7 +69,7 @@ struct ContentView: View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Aria Sample").font(.headline)
-                Text("Aria \(AriaInfo.version)  ·  AriaApple \(AriaApple.version)")
+                Text(self.providerLabel)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -76,9 +83,24 @@ struct ContentView: View {
         .background(Color(.secondarySystemBackground))
     }
 
+    /// Active-provider line shown under the title. Defaults to the
+    /// FoundationModels label; switches to the MLX model display
+    /// name when the user has selected one in the Models sheet.
+    private var providerLabel: String {
+        #if canImport(AriaMLX)
+            if let id = self.appState.selectedMLXModelID {
+                return MLXModelCatalog.entry(for: id)?.displayName ?? id
+            }
+        #endif
+        return "Aria \(AriaInfo.version)  ·  FoundationModels"
+    }
+
     private var actionsMenu: some View {
         Menu {
             Button("Memories…") { self.memoriesSheetShown = true }
+            #if canImport(AriaMLX)
+                Button("MLX models…") { self.mlxModelsSheetShown = true }
+            #endif
             Button("Share session…") { Task { await self.exportSession() } }
             Button("Clear chat", role: .destructive) {
                 Task { await self.clearHistory() }
@@ -256,9 +278,7 @@ struct ContentView: View {
                     RememberTool(memoryStore: memory, namespace: Self.memoryNamespace)
                 ))
             }
-            let provider = FoundationModelsProvider(
-                typedTools: kits.map(\.factory)
-            )
+            let provider: any LLMProvider = self.makeProvider(kits: kits)
             return Agent(config: AgentConfig(
                 provider: provider,
                 tools: kits.map(\.anyTool),
@@ -266,6 +286,29 @@ struct ContentView: View {
                 threadId: Self.threadId,
                 middleware: middlewares
             ))
+        }
+
+        /// Pick the active LLM provider based on the user's
+        /// per-conversation choice. When an MLX model is selected
+        /// (and AriaMLX is available) we route through `MLXProvider`
+        /// using the long-lived `MLXModelStore` from `AppState`.
+        /// Otherwise we fall back to FoundationModels with the
+        /// typed-tool kits the chat agent has always used.
+        @available(iOS 26.0, macOS 26.0, *)
+        private func makeProvider(
+            kits: [FoundationModelsToolKit]
+        ) -> any LLMProvider {
+            #if canImport(AriaMLX)
+                if let id = self.appState.selectedMLXModelID,
+                   let capabilities = MLXModelCatalog.entry(for: id) {
+                    return MLXProvider(
+                        capabilities: capabilities,
+                        store: self.appState.mlxStore,
+                        defaultInstructions: Self.systemPrompt(memoryEnabled: false)
+                    )
+                }
+            #endif
+            return FoundationModelsProvider(typedTools: kits.map(\.factory))
         }
 
         /// Returns a configured `MemoryStore`, or `nil` when the OS does
