@@ -59,6 +59,42 @@
             }
         }
 
+        // MARK: - Middleware integration
+
+        func testAgentRespondAppliesMiddlewareLifecycle() async throws {
+            try XCTSkipIf(
+                SystemLanguageModel.default.availability != .available,
+                "FoundationModels system model is not available on this runner"
+            )
+
+            // RecordingMiddleware captures every lifecycle hook so we
+            // can assert the order Agent.respond invoked them in.
+            let recorder = HookRecorder()
+            let middleware = RecordingMiddleware(recorder: recorder)
+            let agent = Agent(config: AgentConfig(
+                provider: FoundationModelsProvider(),
+                tools: [],
+                systemPrompt: "Reply with a short fictional quote.",
+                threadId: "t-respond-middleware",
+                middleware: [middleware]
+            ))
+
+            for try await _ in agent.respond(.message(.user("Quote me.")), as: TestQuote.self) { }
+
+            let hooks = await recorder.calls
+            XCTAssertEqual(hooks, ["beforeRun", "beforeStep", "afterStep", "afterRun"])
+
+            // afterStep should see both the original user message and
+            // the JSON-encoded assistant final response appended.
+            let lastSeenMessages = await recorder.lastMessages
+            XCTAssertEqual(lastSeenMessages.first?.role, .user, "User message should be preserved")
+            XCTAssertEqual(lastSeenMessages.last?.role, .assistant, "Final assistant message should be appended")
+            XCTAssertTrue(
+                lastSeenMessages.last?.textContent.contains("\"text\"") ?? false,
+                "Final assistant message should be JSON-encoded structured response"
+            )
+        }
+
         // MARK: - Smoke test (requires real model availability)
 
         func testStreamStructuredEmitsPartialsAndFinishWhenModelAvailable() async throws {
@@ -84,6 +120,42 @@
             let final = try XCTUnwrap(finalQuote, "Expected finish event with a quote")
             XCTAssertFalse(final.text.isEmpty, "Final quote text was empty")
             XCTAssertFalse(final.speaker.isEmpty, "Final quote speaker was empty")
+        }
+    }
+
+    // MARK: - HookRecorder + RecordingMiddleware
+
+    private actor HookRecorder {
+        private(set) var calls: [String] = []
+        private(set) var lastMessages: [Message] = []
+
+        func record(_ name: String, messages: [Message]) {
+            self.calls.append(name)
+            self.lastMessages = messages
+        }
+    }
+
+    private struct RecordingMiddleware: AgentMiddleware {
+        let recorder: HookRecorder
+
+        func beforeRun(_ state: AgentState) async throws -> AgentState {
+            await self.recorder.record("beforeRun", messages: state.messages)
+            return state
+        }
+
+        func beforeStep(_ state: AgentState) async throws -> AgentState {
+            await self.recorder.record("beforeStep", messages: state.messages)
+            return state
+        }
+
+        func afterStep(_ state: AgentState) async throws -> AgentState {
+            await self.recorder.record("afterStep", messages: state.messages)
+            return state
+        }
+
+        func afterRun(_ state: AgentState, finalEvent _: AgentEvent) async throws -> AgentState {
+            await self.recorder.record("afterRun", messages: state.messages)
+            return state
         }
     }
 
