@@ -30,6 +30,9 @@ struct ContentView: View {
         .sheet(isPresented: self.$memoriesSheetShown) {
             MemoriesSheet(storage: self.storage, namespace: Self.memoryNamespace)
         }
+        .sheet(item: self.$shareItem) { item in
+            ShareSheet(items: [item.url])
+        }
     }
 
     // MARK: Private
@@ -45,6 +48,11 @@ struct ContentView: View {
     /// injected before the model's reply.
     @State private var memoryProbe = MemoryProbe()
     @State private var memoriesSheetShown = false
+    /// Single recorder threaded into both the chat agent and the
+    /// state-graph demo so a single "Share session" tap exports a
+    /// bundle covering everything that ran in this session.
+    @State private var sessionRecorder = SessionRecorder()
+    @State private var shareItem: SessionShareItem?
 
     private let storage: GRDBStorage
 
@@ -71,6 +79,7 @@ struct ContentView: View {
     private var actionsMenu: some View {
         Menu {
             Button("Memories…") { self.memoriesSheetShown = true }
+            Button("Share session…") { Task { await self.exportSession() } }
             Button("Clear chat", role: .destructive) {
                 Task { await self.clearHistory() }
             }
@@ -291,6 +300,13 @@ struct ContentView: View {
                     )
                 )
             }
+            let recording = RecordingMiddleware(recorder: self.sessionRecorder)
+            recording.bind(
+                providerSystem: "apple.foundationmodels.default",
+                providerModel: "apple.foundationmodels.default",
+                systemPrompt: Self.systemPrompt(memoryEnabled: memory != nil)
+            )
+            middlewares.append(recording)
             return middlewares
         }
 
@@ -424,12 +440,13 @@ struct ContentView: View {
         @available(iOS 26.0, macOS 26.0, *)
         @MainActor
         func runHaikuChain() async {
+            let recorder = self.sessionRecorder
             await self.driveHaikuChain(
                 userLabel: "[Graph] haiku chain",
                 stream: { compiled, checkpointConfig in
                     compiled.stream(
                         initial: HaikuChainState(),
-                        options: .init(checkpoint: checkpointConfig)
+                        options: .init(checkpoint: checkpointConfig, recorder: recorder)
                     )
                 }
             )
@@ -527,6 +544,33 @@ extension ContentView {
         } catch {
             self.transcript = [.assistant("Could not clear history: \(error)")]
         }
+    }
+
+    /// Build the current `SessionBundle` from the shared
+    /// `SessionRecorder`, write it as pretty JSON to a temp file, and
+    /// hand the URL to a share sheet. Lets the user export an entire
+    /// run — chat agent steps + state-graph node transitions — in
+    /// one tap.
+    @MainActor
+    func exportSession() async {
+        do {
+            let bundle = await self.sessionRecorder.bundle()
+            let url = try Self.writeBundleToTempFile(bundle)
+            self.shareItem = SessionShareItem(url: url)
+        } catch {
+            self.transcript = [.assistant("Could not export session: \(error)")]
+        }
+    }
+
+    private static func writeBundleToTempFile(_ bundle: SessionBundle) throws -> URL {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(bundle)
+        let filename = "aria-session-\(bundle.id).json"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+        try data.write(to: url, options: .atomic)
+        return url
     }
 }
 
