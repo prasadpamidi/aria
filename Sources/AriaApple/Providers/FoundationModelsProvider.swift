@@ -195,11 +195,15 @@
                 from: executableTools,
                 continuation: continuation
             )
-            let toolDefinitions = bridgeTools.map { Transcript.ToolDefinition(tool: $0) }
+            // Tools are advertised exclusively through `LanguageModelSession.init(tools:)`.
+            // Putting them in `Transcript.Instructions.toolDefinitions` as well caused the
+            // model to mimic the "ToolName: arguments" prompt format in its text response
+            // instead of invoking the tools through FoundationModels' native function-call
+            // path — see PR #N for the diagnostic screenshots.
             let transcript = Self.buildTranscript(
                 history: history,
                 defaultInstructions: self.defaultInstructions,
-                toolDefinitions: toolDefinitions
+                toolDefinitions: []
             )
             let session = LanguageModelSession(
                 tools: bridgeTools,
