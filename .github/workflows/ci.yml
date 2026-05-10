@@ -25,6 +25,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install SQLite headers
+        # GRDB.swift's C shim needs sqlite3.h. The swift Docker image
+        # ships with sqlite3 the binary but not the development headers.
+        # Aria core does not depend on GRDB, but `swift test` builds
+        # every test target — AriaAppleTests transitively pulls GRDB.
+        run: apt-get update && apt-get install -y libsqlite3-dev
+
       - name: Show Swift version
         run: swift --version
 
