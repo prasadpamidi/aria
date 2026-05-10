@@ -6,7 +6,13 @@ Aria is a Swift library for building agent-driven applications that run on-devic
 
 The core is platform-agnostic and builds on Linux. Apple-specific implementations live in `AriaApple`.
 
-> **Status:** Architecture and design phase. Protocols and types described in [`docs/`](docs/) are the target design; implementation is pending.
+> **Status:** Layers 1–6 are implemented and tested on iOS 26 / macOS 26 / Linux. Headline features:
+>
+> - Tool-calling **Agent** with streaming events, middleware lifecycle (`HistoryMiddleware`, `RAGMiddleware`), and structured-output `respond(_:as:)` against FoundationModels.
+> - **StateGraph** with conditional edges, parallel branches + reducers, agent-as-node helpers, and resumable runs via the `Checkpointer`.
+> - **Memory layer** with persistent SQLite chat history + vector store (`GRDBChatHistory`, `GRDBVectorStore`) and `NLEmbeddingEmbedder` for on-device embeddings.
+> - **OpenTelemetry-compatible observability** via `swift-distributed-tracing` + `swift-metrics`. Spans use OTel GenAI semantic conventions; backends like Phoenix / Honeycomb auto-render the runs.
+> - **Session recording + replay** via `SessionRecorder` + `SessionReplayer` (in `AriaTesting`). Capture a run as a `SessionBundle` JSON, ship it anywhere, replay against a fresh agent for regression tests, prompt experiments, or debugging.
 
 ---
 
@@ -50,28 +56,60 @@ Sources/
 
 ## Quick start
 
-> Implementation pending. The snippets below describe the *target* API.
-
 ```swift
 import Aria
 import AriaApple
 
+let storage = try GRDBStorage()
+let timeKit = registerFoundationModelsTool(CurrentTimeTool())
+
 let agent = Agent(config: AgentConfig(
-    provider: FoundationModelsProvider(model: .systemDefault),
-    tools: [AnyTool(WeatherTool(httpClient: client))],
+    provider: FoundationModelsProvider(typedTools: [timeKit.factory]),
+    tools: [timeKit.anyTool],
     systemPrompt: "You are a helpful assistant.",
-    history: SwiftDataChatHistory(),
-    checkpointer: SwiftDataCheckpointer()
+    threadId: "main",
+    middleware: [HistoryMiddleware(history: storage.chatHistory)]
 ))
 
-for try await event in agent.stream(.message(.user("What's the weather in Tokyo?")), options: .init()) {
+for try await event in agent.stream(.message(.user("What's the time in Tokyo?"))) {
     switch event {
-    case .textDelta(let chunk): print(chunk, terminator: "")
-    case .toolCallRequested(let call): print("[calling \(call.name)]")
+    case let .textDelta(chunk): print(chunk, terminator: "")
+    case let .toolCallRequested(call): print("[calling \(call.name)]")
     case .finish: print("\n[done]")
     default: break
     }
 }
+```
+
+A complete record + replay loop in 20 lines (cross-platform, no Apple deps):
+
+```swift
+import Aria
+import AriaTesting
+
+// 1. Record an agent run
+let recorder = SessionRecorder()
+let recording = RecordingMiddleware(recorder: recorder)
+let provider = MockLLMProvider(scenes: [.text("hello")])
+let agent = Agent(config: AgentConfig(
+    provider: provider, tools: [], threadId: "demo",
+    middleware: [recording]
+))
+for try await _ in agent.stream(.message(.user("hi"))) {}
+
+// 2. Bundle it (Codable, ship anywhere)
+let bundle = await recorder.bundle()
+let json = try JSONEncoder().encode(bundle)
+
+// 3. Replay against a fresh agent
+let replay = SessionReplayer.mockProvider(from: bundle.agent!)
+let replayedAgent = Agent(config: AgentConfig(provider: replay, tools: [], threadId: "replay"))
+```
+
+Run the same flow as a CLI demo:
+
+```bash
+swift run AriaCLI    # records, prints the JSON bundle, replays it
 ```
 
 ## Build and test
@@ -115,6 +153,7 @@ See [`AGENTS.md`](AGENTS.md) for the full lane reference.
 - [`docs/principles.md`](docs/principles.md) — architectural principles
 - [`docs/architecture.md`](docs/architecture.md) — layered design and module layout
 - [`docs/platform-boundary.md`](docs/platform-boundary.md) — cross-platform discipline
+- [`docs/observability.md`](docs/observability.md) — OTel tracing/metrics + session recording / replay
 - [`docs/layers/`](docs/layers/) — per-layer specs
 - [`docs/decisions/`](docs/decisions/) — architecture decision records
 - [`docs/glossary.md`](docs/glossary.md) — terminology
