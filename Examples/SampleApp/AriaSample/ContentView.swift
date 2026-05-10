@@ -359,8 +359,20 @@ struct ContentView: View {
             defer { isStreaming = false }
             self.transcript.append(.user("Suggest a fun activity for me today."))
             self.transcript.append(.assistant(""))
+            // Use a tool-free agent for the structured demo. The chat
+            // agent's tools (current_time, remember_fact) and its
+            // "always use tools" system prompt aren't relevant here,
+            // and registering them alongside a structured response can
+            // make the model spin on tool routing instead of producing
+            // snapshots.
+            let suggestAgent = Agent(config: AgentConfig(
+                provider: FoundationModelsProvider(),
+                tools: [],
+                systemPrompt: "Suggest one specific fun activity. Reply only via the structured response.",
+                threadId: "suggest-demo"
+            ))
             do {
-                let stream = self.makeAgent().respond(
+                let stream = suggestAgent.respond(
                     .message(.user("Suggest a fun activity I could do today.")),
                     as: ActivitySuggestion.self
                 )
