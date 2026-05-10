@@ -28,7 +28,12 @@ extension CompiledStateGraph {
                     "Routing produced unknown node '\(nextName)'"
                 )
             }
-            state = try await self.runNode(node, state: state, continuation: continuation)
+            state = try await self.runNode(
+                node,
+                state: state,
+                continuation: continuation,
+                recorder: options.recorder
+            )
             try await self.writeCheckpointIfEnabled(
                 state: state, node: node.name, options: options
             )
@@ -57,7 +62,10 @@ extension CompiledStateGraph {
             return try (state, Self.resolve(edge, state: state))
         case let .parallel(branches, joinAt):
             let merged = try await self.runParallel(
-                branches: branches, input: state, continuation: continuation
+                branches: branches,
+                input: state,
+                continuation: continuation,
+                recorder: options.recorder
             )
             try await self.writeCheckpointIfEnabled(
                 state: merged, node: name, options: options
@@ -80,19 +88,59 @@ extension CompiledStateGraph {
 
     /// Run a single node: emit `.nodeStart`, await `node.run`, emit
     /// `.nodeEnd`. Used by both the linear path and parallel branches.
+    /// When a `recorder` is supplied, the input + output state are
+    /// JSON-encoded and shipped to it for `SessionBundle` export.
     func runNode(
         _ node: Node<State>,
         state: State,
-        continuation: AsyncThrowingStream<StateGraphEvent<State>, any Error>.Continuation
+        continuation: AsyncThrowingStream<StateGraphEvent<State>, any Error>.Continuation,
+        recorder: SessionRecorder? = nil
     ) async throws -> State {
         try await withSpan(AriaSemConv.Span.stateGraphNode, ofKind: .internal) { span in
             span.attributes[AriaSemConv.Aria.stateGraphNode] = node.name
             AriaMetrics.stateGraphNodeExecutions(name: node.name).increment()
             continuation.yield(.nodeStart(name: node.name, state: state))
+            let started = ContinuousClock.now
             let nextState = try await node.run(state)
+            let duration = ContinuousClock.now - started
             continuation.yield(.nodeEnd(name: node.name, state: nextState))
+            if let recorder {
+                await Self.recordNode(
+                    name: node.name,
+                    inputState: state,
+                    outputState: nextState,
+                    duration: duration,
+                    recorder: recorder
+                )
+            }
             return nextState
         }
+    }
+
+    /// JSON-encode the input + output state and ship them to the
+    /// recorder. Encoding failures are swallowed: a missed record is
+    /// preferable to crashing a run.
+    private static func recordNode(
+        name: String,
+        inputState: State,
+        outputState: State,
+        duration: Duration,
+        recorder: SessionRecorder
+    ) async {
+        let encoder = JSONEncoder()
+        guard let inputData = try? encoder.encode(inputState),
+              let outputData = try? encoder.encode(outputState) else {
+            return
+        }
+        let components = duration.components
+        let seconds = Double(components.seconds)
+            + Double(components.attoseconds) * 1e-18
+        await recorder.recordStateGraphNode(
+            name: name,
+            inputState: inputData,
+            outputState: outputData,
+            durationSeconds: seconds
+        )
     }
 
     /// Fan-out execution: run each branch node concurrently with the
@@ -103,14 +151,16 @@ extension CompiledStateGraph {
     func runParallel(
         branches: [String],
         input: State,
-        continuation: AsyncThrowingStream<StateGraphEvent<State>, any Error>.Continuation
+        continuation: AsyncThrowingStream<StateGraphEvent<State>, any Error>.Continuation,
+        recorder: SessionRecorder? = nil
     ) async throws -> State {
         try await withSpan(AriaSemConv.Span.stateGraphParallel, ofKind: .internal) { span in
             span.attributes[AriaSemConv.Aria.stateGraphParallelBranches] = branches
             let outputs = try await self.runBranchesInParallel(
                 branches: branches,
                 input: input,
-                continuation: continuation
+                continuation: continuation,
+                recorder: recorder
             )
             return self.foldOutputs(outputs, input: input)
         }
@@ -124,7 +174,8 @@ extension CompiledStateGraph {
     private func runBranchesInParallel(
         branches: [String],
         input: State,
-        continuation: AsyncThrowingStream<StateGraphEvent<State>, any Error>.Continuation
+        continuation: AsyncThrowingStream<StateGraphEvent<State>, any Error>.Continuation,
+        recorder: SessionRecorder? = nil
     ) async throws -> [State] {
         try await withThrowingTaskGroup(
             of: (Int, State).self,
@@ -138,7 +189,7 @@ extension CompiledStateGraph {
                 }
                 group.addTask {
                     let result = try await self.runNode(
-                        node, state: input, continuation: continuation
+                        node, state: input, continuation: continuation, recorder: recorder
                     )
                     return (index, result)
                 }
