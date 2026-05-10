@@ -27,6 +27,12 @@ struct MemoriesSheet: View {
                 .navigationTitle("Memories")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Clear all", role: .destructive) {
+                            Task { await self.clearAll() }
+                        }
+                        .disabled(self.items.isEmpty)
+                    }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Refresh") { Task { await self.load() } }
                     }
@@ -55,13 +61,52 @@ struct MemoriesSheet: View {
                 .foregroundStyle(.secondary)
                 .padding()
         } else {
-            List(self.items, id: \.id) { item in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(item.content).font(.body)
-                    Text(item.id).font(.caption2).foregroundStyle(.tertiary)
+            List {
+                ForEach(self.items, id: \.id) { item in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.content).font(.body)
+                        Text(item.id).font(.caption2).foregroundStyle(.tertiary)
+                    }
+                    .padding(.vertical, 4)
                 }
-                .padding(.vertical, 4)
+                .onDelete { offsets in
+                    Task { await self.delete(at: offsets) }
+                }
             }
+        }
+    }
+
+    @MainActor
+    private func delete(at offsets: IndexSet) async {
+        guard let store = self.makeStore() else {
+            self.loadError = "NLEmbedding unavailable on this device."
+            return
+        }
+        let ids = offsets.map { self.items[$0].id }
+        do {
+            for id in ids {
+                try await store.forget(id: id, namespace: self.namespace)
+            }
+            self.items.remove(atOffsets: offsets)
+        } catch {
+            self.loadError = "Delete failed: \(error)"
+        }
+    }
+
+    @MainActor
+    private func clearAll() async {
+        guard let store = self.makeStore() else {
+            self.loadError = "NLEmbedding unavailable on this device."
+            return
+        }
+        let ids = self.items.map(\.id)
+        do {
+            for id in ids {
+                try await store.forget(id: id, namespace: self.namespace)
+            }
+            self.items = []
+        } catch {
+            self.loadError = "Clear failed: \(error)"
         }
     }
 
