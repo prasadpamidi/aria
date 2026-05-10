@@ -206,11 +206,14 @@ struct ContentView: View {
         /// Returns a configured `MemoryStore`, or `nil` when the OS does
         /// not ship an `NLEmbedding` for the chosen language. The sample
         /// degrades gracefully — agent + history still work.
+        ///
+        /// Vectors persist in the same `GRDBStorage` SQLite file as
+        /// chat history, so remembered facts survive process restarts.
         private func makeMemoryStore() -> (any MemoryStore)? {
             guard let embedder = NLEmbeddingEmbedder() else {
                 return nil
             }
-            let store = InMemoryVectorStore(dimensions: embedder.dimensions)
+            let store = self.storage.vectorStore(dimensions: embedder.dimensions)
             return DefaultMemoryStore(embedder: embedder, store: store)
         }
 
