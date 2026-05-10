@@ -11,9 +11,14 @@
     /// surrounding module compiles on earlier OS versions but instances of
     /// this type cannot be constructed there — `@available` enforces that.
     ///
-    /// PR 2 scope: text streaming only. Tool calling lands with the agent
-    /// loop in PR 3, where the JSONSchema-based `Tool` protocol is bridged
-    /// to FoundationModels' `Generable`-based tool surface.
+    /// History is handed to the model as a `FoundationModels.Transcript`:
+    /// system prompts become `Instructions`, prior user turns become
+    /// `prompt` entries, prior assistant text becomes `response` entries,
+    /// prior tool calls become `toolCalls` entries, and prior tool
+    /// results become `toolOutput` entries. Only the *last* message in
+    /// the input array is sent as the new prompt to `streamResponse(to:)`.
+    /// This avoids the transcript-style hallucination the model produces
+    /// when given concatenated `User: …\nAssistant: …` text.
     @available(iOS 26.0, macOS 26.0, *)
     public struct FoundationModelsProvider: LLMProvider {
         // MARK: Lifecycle
@@ -51,43 +56,54 @@
 
         // MARK: Internal
 
-        /// Translate a message history into a system instruction and prompt
-        /// payload suitable for `LanguageModelSession`. Exposed at internal
-        /// access so it can be unit-tested without booting the model.
-        static func translate(
-            messages: [Message],
-            defaultInstructions: String?
-        ) -> (instructions: String, prompt: String) {
-            var instructionParts: [String] = []
-            if let defaultInstructions, !defaultInstructions.isEmpty {
-                instructionParts.append(defaultInstructions)
+        /// Pull the new-turn prompt out of the message list. Returns the
+        /// text that should be sent via `streamResponse(to:)` plus the
+        /// remaining history that becomes the `Transcript`.
+        ///
+        /// Throws when there is no usable message at the end. The agent
+        /// loop always passes the latest user message last, so the `.user`
+        /// branch is the production path; the trailing-`.tool`/.assistant
+        /// branches keep the helper composable for direct provider use.
+        static func extractPrompt(
+            from messages: [Message]
+        ) throws -> (prompt: String, history: [Message]) {
+            guard let last = messages.last else {
+                throw AgentError.configurationInvalid(
+                    "FoundationModelsProvider needs at least one message"
+                )
+            }
+            guard !last.textContent.isEmpty else {
+                throw AgentError.configurationInvalid(
+                    "Last message must carry text to seed the next response"
+                )
+            }
+            return (last.textContent, Array(messages.dropLast()))
+        }
+
+        /// Convert prior `Message` history into a `Transcript`. System
+        /// messages collapse into a single `Instructions` entry (along
+        /// with the configured default instructions and the bridge tool
+        /// definitions). Other roles map to their corresponding entry
+        /// type one-for-one.
+        static func buildTranscript(
+            history: [Message],
+            defaultInstructions: String?,
+            toolDefinitions: [Transcript.ToolDefinition]
+        ) -> Transcript {
+            var entries: [Transcript.Entry] = []
+            if let instructions = self.makeInstructions(
+                history: history,
+                defaultInstructions: defaultInstructions,
+                toolDefinitions: toolDefinitions
+            ) {
+                entries.append(.instructions(instructions))
             }
 
-            var conversationParts: [String] = []
-
-            for message in messages {
-                let text = message.textContent
-                guard !text.isEmpty else {
-                    continue
-                }
-                switch message.role {
-                case .system:
-                    instructionParts.append(text)
-                case .user:
-                    conversationParts.append("User: \(text)")
-                case .assistant:
-                    conversationParts.append("Assistant: \(text)")
-                case .tool:
-                    let id = message.toolCallId ?? "unknown"
-                    conversationParts.append("Tool[\(id)]: \(text)")
-                }
+            let toolNameByCallId = Self.toolNameMap(in: history)
+            for message in history where message.role != .system {
+                entries.append(contentsOf: self.entries(for: message, toolNames: toolNameByCallId))
             }
-
-            let instructions = instructionParts.joined(separator: "\n\n")
-            let prompt = conversationParts.isEmpty
-                ? ""
-                : conversationParts.joined(separator: "\n\n")
-            return (instructions, prompt)
+            return Transcript(entries: entries)
         }
 
         // MARK: Private
@@ -122,6 +138,9 @@
                 }
             }
         }
+
+        // Transcript construction helpers live in
+        // FoundationModelsTranscript.swift to keep this type body small.
 
         private func streamCore(
             messages: [Message],
@@ -171,24 +190,20 @@
         ) async throws {
             try Self.checkAvailability()
 
-            let (instructions, prompt) = Self.translate(
-                messages: messages,
-                defaultInstructions: self.defaultInstructions
-            )
-
-            guard !prompt.isEmpty else {
-                throw AgentError.configurationInvalid(
-                    "FoundationModelsProvider requires at least one user/assistant/tool message"
-                )
-            }
-
+            let (prompt, history) = try Self.extractPrompt(from: messages)
             let bridgeTools = try Self.buildBridgeTools(
                 from: executableTools,
                 continuation: continuation
             )
+            let toolDefinitions = bridgeTools.map { Transcript.ToolDefinition(tool: $0) }
+            let transcript = Self.buildTranscript(
+                history: history,
+                defaultInstructions: self.defaultInstructions,
+                toolDefinitions: toolDefinitions
+            )
             let session = LanguageModelSession(
                 tools: bridgeTools,
-                instructions: instructions
+                transcript: transcript
             )
 
             let messageId = UUID().uuidString
@@ -198,11 +213,9 @@
             let stream = session.streamResponse(to: prompt)
             for try await snapshot in stream {
                 try Task.checkCancellation()
-                // `snapshot.content` is `String.PartiallyGenerated`, which for
-                // primitive Generable types (`String`) is alias-equivalent to
-                // `String`. Extract the value synchronously inside the loop
-                // body so we never carry the non-Sendable `Snapshot` across
-                // any concurrency boundary.
+                // Extract the cumulative text synchronously inside the loop
+                // body so the non-Sendable `Snapshot` never crosses an
+                // await boundary.
                 let cumulative = String(describing: snapshot.content)
                 guard cumulative.count > emittedCount else {
                     continue
