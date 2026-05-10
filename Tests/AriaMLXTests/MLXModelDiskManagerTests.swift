@@ -57,10 +57,13 @@
 
         // MARK: Helpers
 
+        /// Build a fake repo dir using the HubCache `models--<org>--<name>/`
+        /// layout the disk manager now expects (matches what
+        /// `swift-huggingface`'s `HubCache` writes).
         private func makeFakeModel(org: String, name: String, bytes: Int) throws {
+            let dirName = "models--\(org)--\(name)"
             let modelDir = self.tempRoot
-                .appendingPathComponent(org, isDirectory: true)
-                .appendingPathComponent(name, isDirectory: true)
+                .appendingPathComponent(dirName, isDirectory: true)
             try FileManager.default.createDirectory(
                 at: modelDir,
                 withIntermediateDirectories: true
