@@ -31,7 +31,9 @@ struct ContentView: View {
             MemoriesSheet(storage: self.storage, namespace: Self.memoryNamespace)
         }
         .sheet(isPresented: self.$mlxModelsSheetShown) {
-            MLXModelsSheet()
+            #if canImport(AriaMLX)
+                MLXModelsSheet()
+            #endif
         }
         .sheet(item: self.$shareItem) { item in
             ShareSheet(items: [item.url])
@@ -83,7 +85,9 @@ struct ContentView: View {
     private var actionsMenu: some View {
         Menu {
             Button("Memories…") { self.memoriesSheetShown = true }
-            Button("MLX models…") { self.mlxModelsSheetShown = true }
+            #if canImport(AriaMLX)
+                Button("MLX models…") { self.mlxModelsSheetShown = true }
+            #endif
             Button("Share session…") { Task { await self.exportSession() } }
             Button("Clear chat", role: .destructive) {
                 Task { await self.clearHistory() }
