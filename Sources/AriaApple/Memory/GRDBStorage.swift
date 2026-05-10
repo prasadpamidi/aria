@@ -6,13 +6,12 @@
 
     // MARK: - GRDBStorage
 
-    /// A shared SQLite container that hosts Aria's `ChatHistory` and
-    /// `Checkpointer` implementations.
+    /// A shared SQLite container that hosts Aria's `ChatHistory`,
+    /// `Checkpointer`, and `VectorStore` implementations.
     ///
-    /// One `GRDBStorage` corresponds to one SQLite file. The
-    /// `chatHistory` and `checkpointer` accessors return implementations
-    /// bound to this container; both share the same `DatabaseQueue` so
-    /// reads and writes serialize cleanly.
+    /// One `GRDBStorage` corresponds to one SQLite file. The accessors
+    /// return implementations bound to this container; all share the
+    /// same `DatabaseQueue` so reads and writes serialize cleanly.
     ///
     /// Migrations are registered up front and run lazily on first use.
     /// New schema versions are append-only — never edit a previously
@@ -45,6 +44,14 @@
             GRDBCheckpointer(dbQueue: self.dbQueue)
         }
 
+        /// A `VectorStore` writing to this storage. Pass the
+        /// dimensionality of the embedder you intend to use; one storage
+        /// can host vectors at multiple dimensionalities — items with
+        /// the wrong dimension count are filtered out on read.
+        public func vectorStore(dimensions: Int) -> GRDBVectorStore {
+            GRDBVectorStore(dbQueue: self.dbQueue, dimensions: dimensions)
+        }
+
         // MARK: Internal
 
         let dbQueue: DatabaseQueue
@@ -54,12 +61,17 @@
         private static let migrator: DatabaseMigrator = {
             var migrator = DatabaseMigrator()
             migrator.registerMigration("v1.tables", migrate: Self.migrateV1Tables(_:))
+            migrator.registerMigration("v2.vectors", migrate: Self.migrateV2Vectors(_:))
             return migrator
         }()
 
         private static func migrateV1Tables(_ db: Database) throws {
             try self.createMessagesTable(db)
             try self.createCheckpointsTable(db)
+        }
+
+        private static func migrateV2Vectors(_ db: Database) throws {
+            try self.createVectorItemsTable(db)
         }
 
         private static func createMessagesTable(_ db: Database) throws {
@@ -91,6 +103,20 @@
             try db.create(
                 indexOn: "checkpoints",
                 columns: ["threadId", "createdAt"]
+            )
+        }
+
+        private static func createVectorItemsTable(_ db: Database) throws {
+            try db.create(table: "vector_items") { table in
+                table.column("id", .text).primaryKey()
+                table.column("dimensions", .integer).notNull()
+                table.column("vector", .blob).notNull()
+                table.column("content", .text).notNull()
+                table.column("metadataJSON", .text).notNull()
+            }
+            try db.create(
+                indexOn: "vector_items",
+                columns: ["dimensions"]
             )
         }
     }
