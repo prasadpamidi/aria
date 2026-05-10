@@ -9,6 +9,12 @@ import SwiftUI
 // MARK: - ContentView
 
 struct ContentView: View {
+    // MARK: Lifecycle
+
+    init(storage: GRDBStorage) {
+        self.storage = storage
+    }
+
     // MARK: Internal
 
     var body: some View {
@@ -18,13 +24,20 @@ struct ContentView: View {
             self.inputBar
         }
         .background(Color(.systemBackground))
+        .task {
+            await self.loadHistory()
+        }
     }
 
     // MARK: Private
 
+    private static let threadId = "default"
+
     @State private var input: String = ""
     @State private var transcript: [TranscriptItem] = []
     @State private var isStreaming: Bool = false
+
+    private let storage: GRDBStorage
 
     // MARK: - Subviews
 
@@ -102,6 +115,14 @@ struct ContentView: View {
         .background(Color(.secondarySystemBackground))
     }
 
+    private static func transcriptItem(from message: Message) -> TranscriptItem? {
+        switch message.role {
+        case .user: .user(message.textContent)
+        case .assistant where !message.textContent.isEmpty: .assistant(message.textContent)
+        default: nil
+        }
+    }
+
     @MainActor
     private func send() async {
         let trimmed = self.input.trimmingCharacters(in: .whitespaces)
@@ -142,7 +163,9 @@ struct ContentView: View {
                 systemPrompt:
                 "You are a concise, helpful assistant. "
                     + "When the user asks for the current time or date, "
-                    + "call the current_time tool."
+                    + "call the current_time tool.",
+                threadId: Self.threadId,
+                middleware: [HistoryMiddleware(history: self.storage.chatHistory)]
             ))
             var assistantText = ""
             do {
@@ -175,6 +198,22 @@ struct ContentView: View {
             }
         }
     #endif
+
+    @MainActor
+    private func loadHistory() async {
+        guard self.transcript.isEmpty else {
+            return
+        }
+        do {
+            let messages = try await self.storage.chatHistory.messages(
+                threadId: Self.threadId
+            )
+            self.transcript = messages.compactMap(Self.transcriptItem(from:))
+        } catch {
+            // Surface load failures inline rather than crashing the app.
+            self.transcript = [.assistant("Could not load history: \(error)")]
+        }
+    }
 
     @MainActor
     private func updateLastAssistant(text: String) {
@@ -241,5 +280,10 @@ struct TranscriptItemView: View {
 }
 
 #Preview {
-    ContentView()
+    if let storage = try? GRDBStorage() {
+        ContentView(storage: storage)
+    } else {
+        Text("Preview unavailable: in-memory GRDBStorage failed to initialize")
+            .padding()
+    }
 }
