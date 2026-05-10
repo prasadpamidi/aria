@@ -15,14 +15,17 @@
 
         // MARK: Public
 
-        /// Hugging Face id reconstructed from the directory layout
-        /// (`<org>/<name>`).
+        /// Hugging Face id reconstructed from the directory name
+        /// (`models--<org>--<name>` → `<org>/<name>`).
         public let id: String
 
-        /// Local directory containing the model files.
+        /// Local directory containing the model files (the
+        /// `models--<org>--<name>/` HubCache repo dir).
         public let directory: URL
 
-        /// Total bytes used by all files under `directory`.
+        /// Total bytes used by all files under `directory` (blobs +
+        /// snapshot symlinks; symlinks count as ~0 so this matches the
+        /// real on-disk footprint).
         public let bytes: Int64
     }
 
@@ -31,10 +34,14 @@
     /// Walks the on-disk Hugging Face cache, computes per-model sizes,
     /// and removes models on demand.
     ///
-    /// `swift-huggingface` and `swift-transformers` both put downloaded
-    /// repositories under `Documents/huggingface/models/<org>/<name>/`
-    /// (sandboxed) by default. The manager treats that directory as the
-    /// authoritative cache root. Pass a custom root in `init` for tests.
+    /// `swift-huggingface`'s `HubCache` lays out repos as
+    /// `<root>/models--<org>--<name>/{blobs,refs,snapshots}` (matching
+    /// the Python `huggingface_hub` cache layout). We pin the root to
+    /// `Documents/huggingface/hub/` via
+    /// `MLXModelDownloader.defaultCacheDirectory()` so downloads
+    /// survive iOS storage pressure (the HubCache default
+    /// `Library/Caches/...` is evictable). Pass a custom root in
+    /// `init` for tests.
     public struct MLXModelDiskManager: Sendable {
         // MARK: Lifecycle
 
@@ -46,14 +53,11 @@
 
         public let root: URL
 
-        /// Default root: `Documents/huggingface/models/`. Created lazily;
+        /// Default root: `Documents/huggingface/hub/` (shared with
+        /// `MLXModelDownloader.defaultHubClient()`). Created lazily;
         /// missing directories are treated as "no models downloaded yet".
         public static func defaultRoot() -> URL {
-            let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
-                ?? URL(fileURLWithPath: NSTemporaryDirectory())
-            return documents
-                .appendingPathComponent("huggingface", isDirectory: true)
-                .appendingPathComponent("models", isDirectory: true)
+            MLXModelDownloader.defaultCacheDirectory()
         }
 
         /// Enumerate every downloaded model. Returns an empty array if
@@ -63,23 +67,18 @@
             guard fileManager.fileExists(atPath: self.root.path) else {
                 return []
             }
-            var results: [MLXDiskModel] = []
-            let orgs = try fileManager.contentsOfDirectory(
+            let entries = try fileManager.contentsOfDirectory(
                 at: self.root,
                 includingPropertiesForKeys: nil,
                 options: [.skipsHiddenFiles]
             )
-            for orgURL in orgs where Self.isDirectory(orgURL) {
-                let models = try fileManager.contentsOfDirectory(
-                    at: orgURL,
-                    includingPropertiesForKeys: nil,
-                    options: [.skipsHiddenFiles]
-                )
-                for modelURL in models where Self.isDirectory(modelURL) {
-                    let bytes = Self.directorySize(modelURL)
-                    let id = "\(orgURL.lastPathComponent)/\(modelURL.lastPathComponent)"
-                    results.append(MLXDiskModel(id: id, directory: modelURL, bytes: bytes))
+            var results: [MLXDiskModel] = []
+            for url in entries where Self.isDirectory(url) {
+                guard let id = Self.id(forRepoDirName: url.lastPathComponent) else {
+                    continue
                 }
+                let bytes = Self.directorySize(url)
+                results.append(MLXDiskModel(id: id, directory: url, bytes: bytes))
             }
             return results.sorted { $0.id < $1.id }
         }
@@ -99,6 +98,23 @@
         }
 
         // MARK: Private
+
+        /// Reverse of HubCache's `models--<org>--<name>` naming.
+        /// Returns `nil` for any sibling we don't recognise (e.g.
+        /// `.metadata`, `.locks`, `datasets--*`, `spaces--*`).
+        private static func id(forRepoDirName name: String) -> String? {
+            let prefix = "models--"
+            guard name.hasPrefix(prefix) else {
+                return nil
+            }
+            let stripped = name.dropFirst(prefix.count)
+            // First "--" separates org and repo; replace only that one.
+            // (Org slugs can't contain "--" on the Hub.)
+            guard let range = stripped.range(of: "--") else {
+                return nil
+            }
+            return stripped.replacingCharacters(in: range, with: "/")
+        }
 
         private static func isDirectory(_ url: URL) -> Bool {
             var isDir: ObjCBool = false
