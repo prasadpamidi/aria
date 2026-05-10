@@ -17,11 +17,40 @@ public protocol LLMProvider: Sendable {
     /// Implementations emit `ProviderEvent`s as the underlying model
     /// produces them. The stream finishes (with success or error) when
     /// the model reaches a terminal state.
+    ///
+    /// Most providers receive only `ToolDefinition`s and let the agent
+    /// dispatch tools after the stream finishes. Providers whose model
+    /// session executes tools internally (Apple FoundationModels, for
+    /// example) should override
+    /// `stream(messages:executableTools:options:)` instead — that gives
+    /// them access to the live `AnyTool` invocation closures.
     func stream(
         messages: [Message],
         tools: [ToolDefinition],
         options: GenerationOptions
     ) -> AsyncThrowingStream<ProviderEvent, any Error>
+}
+
+extension LLMProvider {
+    /// Stream with executable `AnyTool`s instead of bare definitions.
+    ///
+    /// Providers that resolve tools inside their own model session (e.g.
+    /// `FoundationModelsProvider`) override this method to use the
+    /// `AnyTool` invocation closures directly and emit
+    /// `ProviderEvent.toolCallExecuted` once each call resolves.
+    /// Providers that prefer to surface tool-call requests to the agent
+    /// layer can rely on the default forwarding implementation.
+    public func stream(
+        messages: [Message],
+        executableTools: [AnyTool],
+        options: GenerationOptions
+    ) -> AsyncThrowingStream<ProviderEvent, any Error> {
+        self.stream(
+            messages: messages,
+            tools: executableTools.map(\.definition),
+            options: options
+        )
+    }
 }
 
 // MARK: - ProviderCapabilities
