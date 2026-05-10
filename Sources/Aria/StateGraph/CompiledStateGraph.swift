@@ -13,10 +13,12 @@ public struct CompiledStateGraph<State: Sendable & Codable>: Sendable {
 
     init(
         nodes: [String: Node<State>],
-        edges: [String: Edge<State>]
+        edges: [String: Edge<State>],
+        reducers: [AnyReducer<State>] = []
     ) {
         self.nodes = nodes
         self.edges = edges
+        self.reducers = reducers
     }
 
     // MARK: Public
@@ -140,18 +142,19 @@ public struct CompiledStateGraph<State: Sendable & Codable>: Sendable {
         }
     }
 
-    // MARK: Private
+    // MARK: Internal
 
-    /// Metadata key used to record which node produced a checkpoint.
-    /// Read on `resume` to find the edge that should fire next.
-    private static var completedNodeKey: String {
-        "stateGraph.completedNode"
-    }
+    // Read by `CompiledStateGraph+Parallel.swift` — extensions in
+    // different files can't see `private`, so these are internal.
+    let nodes: [String: Node<State>]
+    let edges: [String: Edge<State>]
+    let reducers: [AnyReducer<State>]
 
-    private let nodes: [String: Node<State>]
-    private let edges: [String: Edge<State>]
-
-    private static func resolve(
+    /// Resolve a non-fan-out edge to a single next-node name. Parallel
+    /// edges are routed through `runParallel` directly because they
+    /// produce a merged state in addition to a next node. Internal so
+    /// the parallel-helpers extension can call it.
+    static func resolve(
         _ edge: Edge<State>,
         state: State
     ) throws -> String {
@@ -168,10 +171,14 @@ public struct CompiledStateGraph<State: Sendable & Codable>: Sendable {
                 )
             }
             return chosen
+        case .parallel:
+            throw StateGraphError.invalidGraph(
+                "Parallel edges must be handled by runParallel; resolve called on .parallel"
+            )
         }
     }
 
-    private static func writeCheckpoint(
+    static func writeCheckpoint(
         state: State,
         completedNode: String,
         config: CheckpointConfig
@@ -183,6 +190,14 @@ public struct CompiledStateGraph<State: Sendable & Codable>: Sendable {
             metadata: [Self.completedNodeKey: .string(completedNode)]
         )
         try await config.checkpointer.put(checkpoint, threadId: config.threadId)
+    }
+
+    // MARK: Private
+
+    /// Metadata key used to record which node produced a checkpoint.
+    /// Read on `resume` to find the edge that should fire next.
+    private static var completedNodeKey: String {
+        "stateGraph.completedNode"
     }
 
     private func runHandlingErrors(
@@ -277,51 +292,7 @@ public struct CompiledStateGraph<State: Sendable & Codable>: Sendable {
         )
     }
 
-    /// Drives node execution from `startNode`. Shared between fresh
-    /// runs (called with the entry edge's target) and resumes
-    /// (called with the edge target after the last completed node).
-    private func runFromNode(
-        startNode: String,
-        initialState: State,
-        options: RunOptions,
-        continuation: AsyncThrowingStream<StateGraphEvent<State>, any Error>.Continuation
-    ) async throws {
-        var state = initialState
-        var nextName = startNode
-        var stepCount = 0
-
-        while nextName != StateGraph<State>.end {
-            try Task.checkCancellation()
-            stepCount += 1
-            if stepCount > options.maxSteps {
-                throw StateGraphError.stepLimitExceeded(limit: options.maxSteps)
-            }
-
-            guard let node = self.nodes[nextName] else {
-                throw StateGraphError.invalidGraph(
-                    "Routing produced unknown node '\(nextName)'"
-                )
-            }
-
-            continuation.yield(.nodeStart(name: node.name, state: state))
-            state = try await node.run(state)
-            continuation.yield(.nodeEnd(name: node.name, state: state))
-
-            if let config = options.checkpoint {
-                try await Self.writeCheckpoint(
-                    state: state,
-                    completedNode: node.name,
-                    config: config
-                )
-            }
-
-            guard let edge = self.edges[node.name] else {
-                throw StateGraphError.noEdgeFromNode(node.name)
-            }
-            nextName = try Self.resolve(edge, state: state)
-        }
-
-        continuation.yield(.finish(state: state))
-        continuation.finish()
-    }
+    // `runFromNode` and the parallel + reducer-fold helpers live in
+    // `CompiledStateGraph+Parallel.swift` to keep this type body
+    // under SwiftLint's body-length limit.
 }
