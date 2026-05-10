@@ -112,3 +112,9 @@
 # XCTest methods.
 --disable redundantAsync
 --disable redundantThrows
+
+# SwiftFormat 0.61 extended the trailingCommas rule to function calls,
+# which conflicts with PackageDescription idioms and produces friction
+# without obvious benefit. Disable here; SwiftLint's trailing_comma rule
+# is also disabled so neither tool enforces a particular style.
+--disable trailingCommas

@@ -8,6 +8,7 @@ excluded:
   - DerivedData
   - build
   - vendor
+  - Package.swift            # Trailing commas are idiomatic in PackageDescription
   - Package.resolved
   - "**/.build"
   - "**/SourcePackages"
@@ -65,6 +66,7 @@ disabled_rules:
   - todo                            # Allow TODO comments
   - line_length                     # Handled by SwiftFormat
   - trailing_whitespace             # Handled by SwiftFormat
+  - trailing_comma                  # Handled by SwiftFormat (--commas inline)
   - empty_count                     # Conflicts with `count` parameter names
   - modifier_order                  # Handled by SwiftFormat
   - trailing_closure                # Breaks closure syntax when auto-fixed
@@ -136,6 +138,17 @@ type_name:
 
 # Custom rules — Aria-specific architectural guards
 custom_rules:
+  # Discourage process-aborting calls. fatalError signals "this branch is
+  # impossible"; in production code we should surface failures via typed
+  # errors or Result. Tests are exempt — XCTest fixtures occasionally
+  # need an unrecoverable assertion.
+  no_fatal_error:
+    name: "No fatalError outside tests"
+    regex: '\bfatalError\('
+    message: "Replace fatalError with a typed error / Result. See docs/principles.md."
+    severity: warning
+    excluded: ".*(Tests|UITests).*\\.swift"
+
   no_apple_imports_in_core:
     name: "No Apple-only imports in Aria core"
     regex: '^import (UIKit|AppKit|SwiftUI|WatchKit|FoundationModels|CoreML|NaturalLanguage|Combine|OSLog|EventKit|HealthKit|Contacts|CoreLocation|AVFoundation|Photos|MLX|MLXNN)'

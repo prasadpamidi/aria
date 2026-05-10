@@ -31,6 +31,9 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
         .package(url: "https://github.com/apple/swift-collections.git", from: "1.1.0"),
+        // Persistent memory (chat history + checkpointer) for AriaApple.
+        // Apple-only — `Aria` core never imports it.
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.10.0"),
     ],
     targets: [
         // MARK: - Library targets
@@ -52,7 +55,10 @@ let package = Package(
 
         .target(
             name: "AriaApple",
-            dependencies: ["Aria"],
+            dependencies: [
+                "Aria",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ],
             path: "Sources/AriaApple"
         ),
 
