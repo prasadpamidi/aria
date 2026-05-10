@@ -15,12 +15,14 @@ public final class RAGMiddleware: AgentMiddleware, @unchecked Sendable {
         memoryStore: any MemoryStore,
         namespace: [String],
         topK: Int = 5,
-        instructionPrefix: String = "Relevant memories that may help:"
+        instructionPrefix: String = "Relevant memories that may help:",
+        onRecall: (@Sendable ([MemoryMatch]) -> Void)? = nil
     ) {
         self.memoryStore = memoryStore
         self.namespace = namespace
         self.topK = topK
         self.instructionPrefix = instructionPrefix
+        self.onRecall = onRecall
     }
 
     // MARK: Public
@@ -43,6 +45,10 @@ public final class RAGMiddleware: AgentMiddleware, @unchecked Sendable {
         guard !matches.isEmpty else {
             return state
         }
+        // Surface what was recalled so callers (UI inspectors, logs)
+        // can see the retrieval result without having to re-issue the
+        // query themselves.
+        self.onRecall?(matches)
 
         let context = matches
             .map { "- \($0.item.content)" }
@@ -61,6 +67,7 @@ public final class RAGMiddleware: AgentMiddleware, @unchecked Sendable {
     private let namespace: [String]
     private let topK: Int
     private let instructionPrefix: String
+    private let onRecall: (@Sendable ([MemoryMatch]) -> Void)?
 
     private static func lastUserText(in messages: [Message]) -> String? {
         messages.last(where: { $0.role == .user })?.textContent

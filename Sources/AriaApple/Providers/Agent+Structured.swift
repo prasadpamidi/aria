@@ -35,10 +35,15 @@
                     )
                 }
             }
-            return provider.streamStructured(
-                messages: Self.messages(from: input),
-                as: type
-            )
+            // Surface the agent's `systemPrompt` to the model. Without
+            // it, a bare user message + registered tools can leave the
+            // model spinning on tool routing instead of producing a
+            // structured response.
+            var messages = Self.messages(from: input)
+            if let systemPrompt = self.config.systemPrompt, !systemPrompt.isEmpty {
+                messages.insert(.system(systemPrompt), at: 0)
+            }
+            return provider.streamStructured(messages: messages, as: type)
         }
 
         // MARK: Private
