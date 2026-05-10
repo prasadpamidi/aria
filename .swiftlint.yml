@@ -13,7 +13,7 @@ excluded:
   - "**/.build"
   - "**/SourcePackages"
   - "**/DerivedData"
-  - Examples/SampleApp/AriaSample.xcodeproj
+  - Examples                 # Sample apps aren't library code; don't enforce strict style there.
 
 # Opt-in rules (stricter quality bar)
 opt_in_rules:

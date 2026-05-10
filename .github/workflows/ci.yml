@@ -131,19 +131,13 @@ jobs:
       - name: SwiftFormat (lint)
         run: |
           swiftformat \
-            Sources Tests Examples/AriaCLI \
-            Examples/SampleApp/AriaSample \
-            Examples/SampleApp/AriaSampleTests \
-            Examples/SampleApp/AriaSampleUITests \
+            Sources Tests \
             --config .swiftformat \
             --lint
 
       - name: SwiftLint
         run: |
           swiftlint lint \
-            Sources Tests Examples/AriaCLI \
-            Examples/SampleApp/AriaSample \
-            Examples/SampleApp/AriaSampleTests \
-            Examples/SampleApp/AriaSampleUITests \
+            Sources Tests \
             --config .swiftlint.yml \
             --strict
