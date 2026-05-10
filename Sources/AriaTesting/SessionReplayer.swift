@@ -34,11 +34,9 @@ public enum SessionReplayer {
     /// - assistant text → one `.textDelta`
     /// - assistant `toolCalls` → `.toolCallStart` + `.toolCallEnd`
     ///   pairs, which makes the replay agent dispatch its own tool
-    ///   registry. The replay agent is expected to register a tool
-    ///   with the same name; for deterministic tools the result will
-    ///   match the recording. (V1 limitation: non-deterministic
-    ///   tools may diverge — use a follow-up "replay tool registry"
-    ///   to pin recorded results in that case.)
+    ///   registry. Pair with `tools(from:)` to swap in a registry
+    ///   that returns the recorded outputs deterministically — useful
+    ///   when the original tools were I/O-heavy or non-deterministic.
     /// - finish reason → `.toolUse` when a tool fired,
     ///   `.endTurn` otherwise, so the agent loop advances or stops
     ///   the same way the original run did
@@ -63,6 +61,52 @@ public enum SessionReplayer {
                 input: decoder.decode(type, from: node.inputState),
                 output: decoder.decode(type, from: node.outputState),
                 durationSeconds: node.durationSeconds
+            )
+        }
+    }
+
+    // MARK: - Tool replay
+
+    /// Build a list of `AnyTool`s that return the recorded outputs
+    /// instead of dispatching live tools.
+    ///
+    /// Pair with `mockProvider(from:)` to make a replay deterministic
+    /// for I/O-heavy tools whose live invocation would diverge from
+    /// the recording. Each tool consumes its recorded calls in order
+    /// — the first call to a name pops the first recorded invocation
+    /// of that name, the second pops the second, and so on. Argument
+    /// equality is checked first; if no match is found, the
+    /// next-in-queue result is returned (lenient for inputs that drift
+    /// between record and replay).
+    ///
+    /// The returned tools advertise an empty object schema because
+    /// the bundle doesn't carry the original tool definitions; for
+    /// agents that validate schemas, register the production tool
+    /// definitions separately.
+    public static func tools(from record: AgentRecord) -> [AnyTool] {
+        var byName: [String: [RecordedCall]] = [:]
+        for step in record.steps {
+            let new = Array(step.messagesAfter.dropFirst(step.messagesBefore.count))
+            let extraction = Self.extract(from: new)
+            for call in extraction.toolCalls {
+                let result = extraction.toolResults[call.id] ?? .null
+                byName[call.name, default: []].append(
+                    RecordedCall(arguments: call.arguments, result: result)
+                )
+            }
+        }
+
+        let store = ReplayToolStore(callsByName: byName)
+        return byName.keys.map { name in
+            AnyTool(
+                definition: ToolDefinition(
+                    name: name,
+                    description: "Replay of recorded '\(name)' calls",
+                    inputSchema: .object(properties: [:], required: [])
+                ),
+                invoke: { arguments, _ in
+                    await store.consume(name: name, arguments: arguments)
+                }
             )
         }
     }
@@ -151,4 +195,45 @@ private struct StepExtraction {
     let assistantText: String
     let toolCalls: [ToolCall]
     let toolResults: [String: JSONValue]
+}
+
+// MARK: - RecordedCall
+
+/// One captured `(arguments, result)` pair for a tool name.
+private struct RecordedCall {
+    let arguments: JSONValue
+    let result: JSONValue
+}
+
+// MARK: - ReplayToolStore
+
+/// Actor-isolated FIFO queue of recorded tool calls keyed by tool
+/// name. Each `consume(...)` pops the first matching (or
+/// next-in-queue) entry so replays drain the recording exactly once.
+private actor ReplayToolStore {
+    // MARK: Lifecycle
+
+    init(callsByName: [String: [RecordedCall]]) {
+        self.callsByName = callsByName
+    }
+
+    // MARK: Internal
+
+    func consume(name: String, arguments: JSONValue) -> JSONValue {
+        guard var queue = self.callsByName[name], !queue.isEmpty else {
+            return .null
+        }
+        // Prefer an exact-arguments match so re-orderings or
+        // duplicate-name calls with different args still resolve
+        // correctly. Fall back to the next-in-queue entry when no
+        // arguments match — covers light non-determinism in inputs.
+        let chosenIndex = queue.firstIndex(where: { $0.arguments == arguments }) ?? 0
+        let match = queue.remove(at: chosenIndex)
+        self.callsByName[name] = queue
+        return match.result
+    }
+
+    // MARK: Private
+
+    private var callsByName: [String: [RecordedCall]]
 }

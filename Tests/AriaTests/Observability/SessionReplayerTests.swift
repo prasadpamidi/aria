@@ -102,6 +102,36 @@ final class SessionReplayerTests: XCTestCase {
         )
     }
 
+    // MARK: - Replay tool registry
+
+    func testReplayToolsReturnRecordedOutputs() async throws {
+        let agentRecord = try await Self.recordOriginalToolRun()
+
+        // Replay with the registry instead of the live EchoTool.
+        // This proves the recorded result is what gets returned —
+        // even if a "live" EchoTool implementation drifts.
+        let replayProvider = SessionReplayer.mockProvider(from: agentRecord)
+        let replayTools = SessionReplayer.tools(from: agentRecord)
+        XCTAssertEqual(replayTools.count, 1, "One unique tool name was recorded")
+        XCTAssertEqual(replayTools.first?.name, "echo")
+
+        let replayed = Agent(config: AgentConfig(
+            provider: replayProvider,
+            tools: replayTools,
+            threadId: "t-replay-tools"
+        ))
+        var assistantText = ""
+        for try await event in replayed.stream(.message(.user("call echo"))) {
+            if case let .textDelta(chunk) = event {
+                assistantText += chunk
+            }
+        }
+        XCTAssertTrue(
+            assistantText.contains("response with tool result"),
+            "Replay-tools path should still produce the recorded final reply"
+        )
+    }
+
     // MARK: - State replay
 
     func testStatesDecodesEveryNodeVisit() async throws {
