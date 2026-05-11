@@ -21,7 +21,7 @@
             guard !tools.isEmpty else {
                 return nil
             }
-            return tools.map { toolSpec(from: $0.definition) }
+            return tools.map { self.toolSpec(from: $0.definition) }
         }
 
         /// `ToolDefinition`-flavoured overload. The agent layer reaches
@@ -35,7 +35,7 @@
             guard !definitions.isEmpty else {
                 return nil
             }
-            return definitions.map(toolSpec(from:))
+            return definitions.map(self.toolSpec(from:))
         }
 
         // MARK: - MLX → Aria
