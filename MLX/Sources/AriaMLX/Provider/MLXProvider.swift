@@ -1,4 +1,8 @@
 #if canImport(MLXLMCommon)
+    // The provider streaming + tool-bridging logic legitimately runs a bit
+    // long here; the struct body is already exempt from `type_body_length`
+    // below, and splitting the file would just scatter one cohesive unit.
+    // swiftlint:disable file_length
     import Aria
     import CoreImage
     import Foundation
