@@ -2,6 +2,11 @@
 //
 // Aria — Composable on-device agent runtime for Apple platforms.
 // See docs/ for architecture and design.
+//
+// MLX-backed providers live in `./MLX/Package.swift` as a separate
+// SwiftPM package. Consumers that only need FoundationModels (or any
+// custom LLMProvider) should depend on this root package; consumers
+// that need MLX models add a second SPM reference to `./MLX/`.
 
 import PackageDescription
 
@@ -22,13 +27,8 @@ let package = Package(
         .library(name: "AriaTesting", targets: ["AriaTesting"]),
 
         // Apple system-framework implementations: FoundationModels,
-        // NLEmbedding, GRDB-backed memory, OSLog. Lighter than `AriaMLX`.
+        // NLEmbedding, GRDB-backed memory, OSLog.
         .library(name: "AriaApple", targets: ["AriaApple"]),
-
-        // MLX-backed LLMProvider + model download/disk management.
-        // Separate target because `mlx-swift-lm` is heavyweight; consumers
-        // who only want FoundationModels shouldn't pay the size/build cost.
-        .library(name: "AriaMLX", targets: ["AriaMLX"]),
 
         // Cross-platform tool implementations.
         .library(name: "AriaTools", targets: ["AriaTools"]),
@@ -45,16 +45,6 @@ let package = Package(
         // Persistent memory (chat history + checkpointer) for AriaApple.
         // Apple-only — `Aria` core never imports it.
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.10.0"),
-        // MLX on-device LLM runtime + model download. Apple-Silicon-only.
-        // Lives behind the `AriaMLX` target so non-MLX consumers don't
-        // resolve it. `mlx-swift-lm` 3.x split out the LM libraries and
-        // requires consumers to wire up an external downloader +
-        // tokenizer loader; we use DePasqualeOrg's adapter packages
-        // (swift-huggingface-mlx for the HF Hub downloader,
-        // swift-transformers-mlx for tokenizer loading).
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", from: "3.31.3"),
-        .package(url: "https://github.com/DePasqualeOrg/swift-huggingface-mlx.git", from: "0.2.0"),
-        .package(url: "https://github.com/DePasqualeOrg/swift-transformers-mlx.git", branch: "main"),
     ],
     targets: [
         // MARK: - Library targets
@@ -86,44 +76,6 @@ let package = Package(
         ),
 
         .target(
-            name: "AriaMLX",
-            dependencies: [
-                "Aria",
-                // mlx-swift's C++ backend needs Apple's Accelerate /
-                // Metal headers — it can't build on Linux. Gate every
-                // MLX product on Apple platforms; AriaMLX's own
-                // sources are wrapped in `#if canImport(MLXLLM)` so
-                // the target builds (empty) on Linux.
-                .product(
-                    name: "MLXLLM",
-                    package: "mlx-swift-lm",
-                    condition: .when(platforms: [.iOS, .macOS, .visionOS])
-                ),
-                .product(
-                    name: "MLXVLM",
-                    package: "mlx-swift-lm",
-                    condition: .when(platforms: [.iOS, .macOS, .visionOS])
-                ),
-                .product(
-                    name: "MLXLMCommon",
-                    package: "mlx-swift-lm",
-                    condition: .when(platforms: [.iOS, .macOS, .visionOS])
-                ),
-                .product(
-                    name: "MLXLMHuggingFace",
-                    package: "swift-huggingface-mlx",
-                    condition: .when(platforms: [.iOS, .macOS, .visionOS])
-                ),
-                .product(
-                    name: "MLXLMTransformers",
-                    package: "swift-transformers-mlx",
-                    condition: .when(platforms: [.iOS, .macOS, .visionOS])
-                ),
-            ],
-            path: "Sources/AriaMLX"
-        ),
-
-        .target(
             name: "AriaTools",
             dependencies: ["Aria"],
             path: "Sources/AriaTools"
@@ -141,12 +93,6 @@ let package = Package(
             name: "AriaAppleTests",
             dependencies: ["Aria", "AriaApple", "AriaTesting"],
             path: "Tests/AriaAppleTests"
-        ),
-
-        .testTarget(
-            name: "AriaMLXTests",
-            dependencies: ["Aria", "AriaMLX", "AriaTesting"],
-            path: "Tests/AriaMLXTests"
         ),
 
         // MARK: - Examples

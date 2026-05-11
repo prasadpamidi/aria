@@ -145,13 +145,16 @@
             )
         }
 
-        /// Gemma 4-specific path: emit OpenAI Chat Completions
-        /// shape so the model's chat template renders prior tool
-        /// calls and their responses. Bypasses `Chat.Message` (which
-        /// has no `tool_calls` field) and the
-        /// `Gemma4MessageGenerator` (which would drop them).
-        private static func gemma4UserInput(
+        /// OpenAI Chat Completions–shaped user input for families
+        /// whose chat template iterates `message.tool_calls` and
+        /// `message.tool_call_id`. Bypasses `Chat.Message` (no
+        /// `tool_calls` field) and `mlx-swift-lm`'s built-in
+        /// `MessageGenerator`s (which drop tool_calls). Covers
+        /// Gemma 4 and Qwen 2.5 VL; both consume the same dict
+        /// shape modulo the order of user-content parts.
+        private static func openAIToolUserInput(
             from messages: [Aria.Message],
+            capabilities: MLXModelCapabilities,
             defaultInstructions: String?,
             toolDefinitions: [ToolDefinition]
         ) -> UserInput {
@@ -175,7 +178,7 @@
             var allImages: [UserInput.Image] = []
             for message in messages where message.role != .system {
                 allImages.append(contentsOf: Self.images(in: message))
-                raw.append(Self.gemma4Message(from: message))
+                raw.append(Self.openAIMessage(from: message, capabilities: capabilities))
             }
 
             return UserInput(
@@ -185,19 +188,20 @@
             )
         }
 
-        /// Convert one `Aria.Message` into the dict shape
-        /// Gemma 4's chat template understands. User content gets
-        /// the typed-parts array (so `[{type:"image"}]` triggers
+        /// Convert one `Aria.Message` into the OpenAI Chat
+        /// Completions dict shape. User content gets the
+        /// typed-parts array (so `[{type:"image"}]` triggers
         /// image-token expansion); assistant tool calls land in a
         /// `tool_calls` array; tool messages carry `tool_call_id`.
-        private static func gemma4Message(
-            from message: Aria.Message
+        private static func openAIMessage(
+            from message: Aria.Message,
+            capabilities: MLXModelCapabilities
         ) -> MLXLMCommon.Message {
             switch message.role {
             case .user:
-                return self.gemma4UserMessage(from: message)
+                return self.openAIUserMessage(from: message, capabilities: capabilities)
             case .assistant:
-                return self.gemma4AssistantMessage(from: message)
+                return self.openAIAssistantMessage(from: message)
             case .tool:
                 var dict: MLXLMCommon.Message = [
                     "role": "tool",
@@ -213,18 +217,35 @@
             }
         }
 
-        private static func gemma4UserMessage(
-            from message: Aria.Message
+        private static func openAIUserMessage(
+            from message: Aria.Message,
+            capabilities: MLXModelCapabilities
         ) -> MLXLMCommon.Message {
-            var contentParts: [[String: any Sendable]] = []
-            for part in message.content where part.isImage {
-                contentParts.append(["type": "image"])
+            let imageParts: [[String: any Sendable]] = message.content.compactMap { part in
+                if case .image = part {
+                    return ["type": "image"]
+                }
+                return nil
             }
-            contentParts.append(["type": "text", "text": message.textContent])
+            let textPart: [String: any Sendable] = [
+                "type": "text",
+                "text": message.textContent
+            ]
+            // Qwen 2.5 VL's `Qwen2VLMessageGenerator` emits text
+            // first then images; Gemma 4's chat template iterates
+            // the content array in order and emits an `<|image|>`
+            // marker on every image part — image-first matches the
+            // ordering its template expects.
+            let contentParts: [[String: any Sendable]] =
+                if capabilities.usesGemma4ToolFormat {
+                    imageParts + [textPart]
+                } else {
+                    [textPart] + imageParts
+                }
             return ["role": "user", "content": contentParts]
         }
 
-        private static func gemma4AssistantMessage(
+        private static func openAIAssistantMessage(
             from message: Aria.Message
         ) -> MLXLMCommon.Message {
             var dict: MLXLMCommon.Message = [
@@ -339,18 +360,20 @@
             defaultInstructions: String?,
             toolDefinitions: [ToolDefinition]
         ) throws -> UserInput {
-            // Gemma 4's chat template only renders tool responses
-            // when the preceding assistant message carries a
-            // `tool_calls` array and the tool message carries
+            // Some chat templates (Gemma 4, Qwen 2.5 VL) only render
+            // prior tool round-trips when the assistant message
+            // carries `tool_calls` and the tool message carries
             // `tool_call_id` (OpenAI Chat Completions shape).
-            // `Gemma4MessageGenerator` produces plain
-            // `{role, content}` dicts and drops orphaned `role:tool`
-            // messages, so we lose every tool round-trip — which
-            // makes the model loop on the same tool call. Build raw
-            // `[MLXLMCommon.Message]` dicts directly for that family.
-            if self.modelCapabilities.usesGemma4ToolFormat {
-                return Self.gemma4UserInput(
+            // `mlx-swift-lm`'s built-in `MessageGenerator`s emit only
+            // `{role, content}` dicts and drop `tool_calls` on the
+            // floor, so the model never sees its prior call or the
+            // response and loops on the same tool. Build raw
+            // `[MLXLMCommon.Message]` dicts directly for those
+            // families.
+            if self.modelCapabilities.requiresOpenAIToolShape {
+                return Self.openAIToolUserInput(
                     from: messages,
+                    capabilities: self.modelCapabilities,
                     defaultInstructions: defaultInstructions,
                     toolDefinitions: toolDefinitions
                 )

@@ -46,8 +46,12 @@
 
         // MARK: Private
 
+        /// HubClient ticks every ~100 ms; 30 ticks = ~3 s without
+        /// any change to `completedUnitCount`.
+        private static let stallTickThreshold = 30
+
         @State private var diskEntries: [MLXDiskModel] = []
-        @State private var progressByID: [String: MLXDownloadProgress] = [:]
+        @State private var progressByID: [String: DownloadDisplay] = [:]
         @State private var errorMessage: String?
 
         private var byID: [String: MLXDiskModel] {
@@ -108,13 +112,29 @@
 
         @MainActor
         private func download(_ entry: MLXModelCapabilities) async {
-            self.progressByID[entry.id] = MLXDownloadProgress(
-                completed: 0, total: nil, fraction: nil
-            )
+            self.progressByID[entry.id] = DownloadDisplay.starting()
             defer { progressByID[entry.id] = nil }
             do {
+                // HubClient sends ticks ~10/sec via its sampling task,
+                // but the Xet transport only updates `completedUnitCount`
+                // when each large file finishes — so the bar plateaus
+                // for minutes between visible jumps. Count consecutive
+                // ticks with no byte movement and flip to "stalled"
+                // (indeterminate spinner) once we've gone ~3 s
+                // without progress, so the UI doesn't look frozen.
+                var stallTicks = 0
+                var lastCompleted: Int64 = -1
                 for try await tick in self.manager.downloadProgress(for: entry.id) {
-                    self.progressByID[entry.id] = tick
+                    if tick.completed > lastCompleted {
+                        stallTicks = 0
+                        lastCompleted = tick.completed
+                    } else {
+                        stallTicks += 1
+                    }
+                    self.progressByID[entry.id] = DownloadDisplay(
+                        progress: tick,
+                        isStalled: stallTicks >= Self.stallTickThreshold
+                    )
                 }
                 await self.refresh()
             } catch {
@@ -130,6 +150,29 @@
             } catch {
                 self.errorMessage = "Delete failed: \(error)"
             }
+        }
+    }
+
+    // MARK: - DownloadDisplay
+
+    /// One progress tick paired with whether the byte counter has
+    /// been frozen long enough to count as "stalled" (HubClient's
+    /// Xet transport only updates progress when each large file
+    /// completes, so the bar can sit at the same byte count for
+    /// minutes during the bulk of the download).
+    private struct DownloadDisplay: Hashable {
+        let progress: MLXDownloadProgress
+        let isStalled: Bool
+
+        static func starting() -> DownloadDisplay {
+            DownloadDisplay(
+                progress: MLXDownloadProgress(
+                    completed: 0,
+                    total: nil,
+                    fraction: nil
+                ),
+                isStalled: false
+            )
         }
     }
 
@@ -179,7 +222,7 @@
         let entry: MLXModelCapabilities
         let manager: MLXModelManager
         let disk: MLXDiskModel?
-        let progress: MLXDownloadProgress?
+        let progress: DownloadDisplay?
         let onDownload: () -> Void
         let onUse: () -> Void
         let onDelete: () -> Void
@@ -263,16 +306,17 @@
             }
         }
 
-        private func progressRow(_ progress: MLXDownloadProgress) -> some View {
+        private func progressRow(_ display: DownloadDisplay) -> some View {
             VStack(alignment: .leading, spacing: 2) {
-                if let fraction = progress.fraction {
-                    ProgressView(value: fraction)
-                } else {
-                    // No total yet — show indeterminate motion so the
-                    // user doesn't see a frozen 0% bar.
+                if display.isStalled || display.progress.fraction == nil {
+                    // Either total is unknown OR the byte counter
+                    // hasn't moved in a while — show indeterminate
+                    // motion so the bar doesn't look frozen.
                     ProgressView()
+                } else if let fraction = display.progress.fraction {
+                    ProgressView(value: fraction)
                 }
-                Text(progressLabel(progress))
+                Text(progressLabel(display))
                     .font(.caption2).foregroundStyle(.secondary)
             }
             .padding(.top, 4)
@@ -310,7 +354,14 @@
         return formatter.string(fromByteCount: bytes)
     }
 
-    private func progressLabel(_ progress: MLXDownloadProgress) -> String {
+    private func progressLabel(_ display: DownloadDisplay) -> String {
+        let progress = display.progress
+        if display.isStalled {
+            // HubClient's Xet transport doesn't surface byte-level
+            // progress during the bulk of the download; tell the
+            // user so a frozen counter doesn't read as a hang.
+            return "Downloading… (no progress reported by Hub)"
+        }
         if let fraction = progress.fraction, let total = progress.total {
             return "\(format(bytes: progress.completed)) / \(format(bytes: total)) "
                 + "(\(Int(fraction * 100))%)"

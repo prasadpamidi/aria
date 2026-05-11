@@ -4,6 +4,8 @@
     @testable import AriaMLX
 
     final class Gemma4ToolCallStreamParserTests: XCTestCase {
+        // MARK: Internal
+
         // MARK: - Single-chunk happy path
 
         func testParsesSingleStringArgument() {
@@ -57,7 +59,11 @@
             collected.append(contentsOf: parser.flush())
 
             let toolCalls = collected.compactMap { event -> Aria.ToolCall? in
-                if case let .toolCall(call) = event { call } else { nil }
+                if case let .toolCall(call) = event {
+                    call
+                } else {
+                    nil
+                }
             }
             XCTAssertEqual(toolCalls.count, 1)
             XCTAssertEqual(toolCalls.first?.name, "remember_fact")
@@ -83,17 +89,6 @@
             XCTAssertEqual(text + final, "Hello world. ")
         }
 
-        // MARK: - Helpers
-
-        private static func joinedTextDeltas(
-            _ events: [Gemma4ToolCallStreamParser.Event]
-        ) -> String {
-            let parts = events.compactMap { event -> String? in
-                if case let .textDelta(text) = event { text } else { nil }
-            }
-            return parts.joined()
-        }
-
         func testIncompleteToolCallAtEndOfStreamIsDropped() {
             var parser = Gemma4ToolCallStreamParser()
             _ = parser.process("<|tool_call>call:foo{ text:<|\"|>incomplete")
@@ -114,7 +109,11 @@
             var parser = Gemma4ToolCallStreamParser()
             let events = parser.process("<|tool_call>not_a_call_format<tool_call|>")
             let calls = events.compactMap { event -> Aria.ToolCall? in
-                if case let .toolCall(call) = event { call } else { nil }
+                if case let .toolCall(call) = event {
+                    call
+                } else {
+                    nil
+                }
             }
             XCTAssertTrue(calls.isEmpty)
         }
@@ -125,9 +124,30 @@
                 #"<|tool_call>call:a{x:1}<tool_call|> and <|tool_call>call:b{y:2}<tool_call|>"#
             )
             let calls = events.compactMap { event -> Aria.ToolCall? in
-                if case let .toolCall(call) = event { call } else { nil }
+                if case let .toolCall(call) = event {
+                    call
+                } else {
+                    nil
+                }
             }
             XCTAssertEqual(calls.map(\.name), ["a", "b"])
+        }
+
+        // MARK: Private
+
+        // MARK: - Helpers
+
+        private static func joinedTextDeltas(
+            _ events: [Gemma4ToolCallStreamParser.Event]
+        ) -> String {
+            let parts = events.compactMap { event -> String? in
+                if case let .textDelta(text) = event {
+                    text
+                } else {
+                    nil
+                }
+            }
+            return parts.joined()
         }
     }
 #endif

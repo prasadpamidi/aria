@@ -15,8 +15,20 @@
     public actor MLXModelStore {
         // MARK: Lifecycle
 
-        public init(downloader: MLXModelDownloader = MLXModelDownloader()) {
+        /// - Parameter evictOnLoad: when `true` (the default), loading
+        ///   a new model id evicts every other cached container before
+        ///   the load starts. On-device, MLX weights are big — Gemma 4
+        ///   e2b plus Qwen 2.5 VL resident at the same time is enough
+        ///   to get iOS to jetsam the app — so the single-slot policy
+        ///   matches the "one active model per conversation" UX. Set
+        ///   to `false` on hosts with plenty of RAM that want
+        ///   instant switching between cached models.
+        public init(
+            downloader: MLXModelDownloader = MLXModelDownloader(),
+            evictOnLoad: Bool = true
+        ) {
             self.downloader = downloader
+            self.evictOnLoad = evictOnLoad
         }
 
         // MARK: Public
@@ -37,6 +49,9 @@
             }
             if let inFlight = self.inFlight[id] {
                 return try await inFlight.value
+            }
+            if self.evictOnLoad {
+                self.evictOthers(keeping: id)
             }
             let task = Task {
                 try await self.downloader.loadContainer(
@@ -75,7 +90,17 @@
         // MARK: Private
 
         private let downloader: MLXModelDownloader
+        private let evictOnLoad: Bool
         private var cached: [String: ModelContainer] = [:]
         private var inFlight: [String: Task<ModelContainer, any Error>] = [:]
+
+        /// Drop every cached container except `id`. Swift's ARC then
+        /// runs each `ModelContainer`'s deinit, which releases the
+        /// MLX weight tensors back to the system.
+        private func evictOthers(keeping id: String) {
+            for cachedId in self.cached.keys where cachedId != id {
+                self.cached[cachedId] = nil
+            }
+        }
     }
 #endif

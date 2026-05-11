@@ -215,6 +215,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				AA00000000000000000000C1 /* XCLocalSwiftPackageReference "../.." */,
+				AA00000000000000000000D1 /* XCLocalSwiftPackageReference "../../MLX" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = E4AD58D82FAFC023004E4F3F /* Products */;
@@ -611,6 +612,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../..;
 		};
+		AA00000000000000000000D1 /* XCLocalSwiftPackageReference "../../MLX" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../../MLX;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -636,7 +641,7 @@
 		};
 		AA00000000000000000000B5 /* AriaMLX */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = AA00000000000000000000C1 /* XCLocalSwiftPackageReference "../.." */;
+			package = AA00000000000000000000D1 /* XCLocalSwiftPackageReference "../../MLX" */;
 			productName = AriaMLX;
 		};
 /* End XCSwiftPackageProductDependency section */

@@ -35,7 +35,7 @@
             guard !definitions.isEmpty else {
                 return nil
             }
-            return definitions.map(Self.toolSpec(from:))
+            return definitions.map(self.toolSpec(from:))
         }
 
         // MARK: - MLX → Aria

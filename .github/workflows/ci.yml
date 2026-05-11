@@ -78,11 +78,25 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
-      - name: Build all targets
+      - name: Build all targets (root package)
         run: swift build
 
-      - name: Run all tests
+      - name: Run root-package tests
         run: swift test
+
+      - name: Build AriaMLX sub-package
+        # AriaMLX moved to its own SwiftPM package so consumers
+        # (e.g. iOS apps using only FoundationModels) don't pull in
+        # `swift-transformers-mlx` and conflict with WhisperKit's
+        # transitive pin. Build + test it independently.
+        run: |
+          cd MLX
+          swift build
+
+      - name: Run AriaMLX tests
+        run: |
+          cd MLX
+          swift test
 
       - name: Run CLI demo
         run: swift run AriaCLI
@@ -160,13 +174,13 @@ jobs:
       - name: SwiftFormat (lint)
         run: |
           swiftformat \
-            Sources Tests \
+            Sources Tests MLX/Sources MLX/Tests \
             --config .swiftformat \
             --lint
 
       - name: SwiftLint
         run: |
           swiftlint lint \
-            Sources Tests \
+            Sources Tests MLX/Sources MLX/Tests \
             --config .swiftlint.yml \
             --strict

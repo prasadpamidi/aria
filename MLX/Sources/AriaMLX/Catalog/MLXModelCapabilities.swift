@@ -112,5 +112,17 @@
         public var usesGemma4ToolFormat: Bool {
             self.family == "gemma-4"
         }
+
+        /// `true` when the model's chat template requires the
+        /// OpenAI Chat Completions message shape
+        /// (`assistant.tool_calls` + `role:tool` with
+        /// `tool_call_id`) to render prior tool round-trips.
+        /// `mlx-swift-lm`'s built-in `MessageGenerator`s drop
+        /// `tool_calls` on the floor, so `MLXProvider` has to bypass
+        /// them and emit raw `[MLXLMCommon.Message]` dicts for these
+        /// families. Currently true for Gemma 4 and Qwen 2.5 VL.
+        public var requiresOpenAIToolShape: Bool {
+            self.usesGemma4ToolFormat || self.family == "qwen2.5-vl"
+        }
     }
 #endif
