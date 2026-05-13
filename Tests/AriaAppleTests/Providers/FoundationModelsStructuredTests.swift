@@ -44,20 +44,49 @@
 
         // MARK: - Agent extension surface
 
-        func testAgentRespondReturnsConfigErrorWhenProviderIsNotFM() async {
+        func testAgentRespondDecodesNonFMProviderTextDeltasAsJSON() async throws {
+            // A non-FM provider that drip-feeds JSON across three textDeltas.
+            // Asserts the generic structured-output path accumulates the
+            // chunks, decodes them via `GeneratedContent(json:)`, and yields
+            // `.finish(TestQuote)`.
+            let provider = JSONStreamingProvider(chunks: [
+                #"{"text":"Hold the line.","#,
+                #""speaker":"#,
+                #""Captain Ada"}"#
+            ])
             let agent = Agent(config: AgentConfig(
-                provider: NotFMProvider(),
+                provider: provider,
+                tools: [],
+                threadId: "t"
+            ))
+            var finalQuote: TestQuote?
+            for try await event in agent.respond(.message(.user("hi")), as: TestQuote.self) {
+                if case let .finish(quote) = event {
+                    finalQuote = quote
+                }
+            }
+            let resolved = try XCTUnwrap(finalQuote, "Expected .finish(TestQuote)")
+            XCTAssertEqual(resolved.text, "Hold the line.")
+            XCTAssertEqual(resolved.speaker, "Captain Ada")
+        }
+
+        func testAgentRespondThrowsProviderFailedWhenNonFMProviderEmitsNoText() async {
+            // Edge case for the generic path: a provider that yields only
+            // framing events (and no `.textDelta`s) leaves the accumulator
+            // empty. The decoder should surface that as `.providerFailed`
+            // rather than try to decode `""` as JSON.
+            let provider = JSONStreamingProvider(chunks: [])
+            let agent = Agent(config: AgentConfig(
+                provider: provider,
                 tools: [],
                 threadId: "t"
             ))
             do {
-                for try await _ in agent.respond(
-                    .message(.user("hi")), as: TestQuote.self
-                ) { }
-                XCTFail("Expected configurationInvalid")
+                for try await _ in agent.respond(.message(.user("hi")), as: TestQuote.self) { }
+                XCTFail("Expected providerFailed")
             } catch let error as AgentError {
-                guard case .configurationInvalid = error else {
-                    XCTFail("Expected configurationInvalid, got \(error)")
+                guard case .providerFailed = error else {
+                    XCTFail("Expected providerFailed, got \(error)")
                     return
                 }
             } catch {
@@ -165,17 +194,22 @@
         }
     }
 
-    // MARK: - Stand-in provider for negative tests
+    // MARK: - Non-FM stand-in providers for the generic structured path
 
-    private struct NotFMProvider: LLMProvider {
+    /// Emits a leading `.messageStart`, each chunk as a `.textDelta`, then
+    /// `.messageStop(.endTurn)`. Lets the test drive the generic
+    /// `consumeGenericStructured` path with deterministic, pre-canned JSON.
+    private struct JSONStreamingProvider: LLMProvider {
+        let chunks: [String]
+
         let capabilities = ProviderCapabilities(
-            modelIdentifier: "test.notfm",
+            modelIdentifier: "test.json-streaming",
             supportsStreaming: true,
             supportsToolUse: false,
             supportsParallelToolCalls: false,
             supportsVision: false,
             supportsAudio: false,
-            supportsStructuredOutput: false,
+            supportsStructuredOutput: true,
             supportsSystemPrompt: true,
             maxContextTokens: nil
         )
@@ -185,7 +219,14 @@
             tools _: [ToolDefinition],
             options _: Aria.GenerationOptions
         ) -> AsyncThrowingStream<ProviderEvent, any Error> {
-            AsyncThrowingStream { $0.finish() }
+            AsyncThrowingStream { continuation in
+                continuation.yield(.messageStart(messageId: "msg-1"))
+                for chunk in self.chunks {
+                    continuation.yield(.textDelta(chunk))
+                }
+                continuation.yield(.messageStop(.endTurn))
+                continuation.finish()
+            }
         }
     }
 
