@@ -8,10 +8,10 @@
 
     @available(iOS 26.0, macOS 26.0, *)
     extension Agent {
-        /// Stream a structured response of type `Content` using the
-        /// agent's configured `FoundationModelsProvider`. Yields partial
-        /// parses as the model generates, any tool calls FM resolves
-        /// during generation, and concludes with `.finish(Content)`.
+        /// Stream a structured response of type `Content`. Yields partial
+        /// parses as the model generates (on `FoundationModelsProvider`
+        /// only), any tool calls the provider resolves during
+        /// generation, and concludes with `.finish(Content)`.
         ///
         /// Applies the agent's middleware lifecycle around the structured
         /// turn:
@@ -24,9 +24,17 @@
         ///   persists the turn)
         /// - `afterRun` runs once at the end with `.finish(.endTurn)`
         ///
-        /// Throws `AgentError.configurationInvalid` (delivered through
-        /// the stream) if the agent is not backed by a
-        /// `FoundationModelsProvider`.
+        /// Provider-agnostic. Two paths internally:
+        /// - `FoundationModelsProvider`: native guided generation via
+        ///   `streamStructured(_:as:)`. Emits `.partial(snapshot)`s as
+        ///   the model decodes the schema incrementally.
+        /// - Any other `LLMProvider`: accumulates the provider's
+        ///   `.textDelta` chunks, then decodes the final assistant text
+        ///   as JSON via `GeneratedContent(json:)` + `Content.init(_:)`.
+        ///   No `.partial` snapshots are emitted on this path — the
+        ///   provider's text isn't a partial parse of the schema — so
+        ///   consumers that render partials will only see `.finish` from
+        ///   a non-FM provider.
         public func respond<Content: Generable & Sendable>(
             _ input: AgentInput,
             as type: Content.Type
@@ -82,12 +90,6 @@
             type: Content.Type,
             continuation: AsyncThrowingStream<StructuredResponseEvent<Content>, any Error>.Continuation
         ) async throws where Content.PartiallyGenerated: Sendable {
-            guard let provider = self.config.provider as? FoundationModelsProvider else {
-                throw AgentError.configurationInvalid(
-                    "Agent.respond(_:as:) requires a FoundationModelsProvider"
-                )
-            }
-
             let threadId = self.config.threadId ?? UUID().uuidString
             var state = AgentState(threadId: threadId, messages: Self.messages(from: input))
 
@@ -102,19 +104,23 @@
             }
 
             let providerMessages = self.buildProviderMessages(state: state)
-            var finalContent: Content?
-            for try await event in provider.streamStructured(messages: providerMessages, as: type) {
-                switch event {
-                case .partial:
-                    continuation.yield(event)
-                case let .toolCallExecuted(call, result):
-                    Self.recordToolCall(call: call, result: result, in: &state)
-                    continuation.yield(event)
-                case let .finish(content):
-                    finalContent = content
-                    continuation.yield(event)
+            let finalContent: Content? =
+                if let fmProvider = self.config.provider as? FoundationModelsProvider {
+                    try await Self.consumeFoundationModelsStructured(
+                        provider: fmProvider,
+                        messages: providerMessages,
+                        type: type,
+                        state: &state,
+                        continuation: continuation
+                    )
+                } else {
+                    try await self.consumeGenericStructured(
+                        messages: providerMessages,
+                        type: type,
+                        state: &state,
+                        continuation: continuation
+                    )
                 }
-            }
 
             // Append the final structured response so HistoryMiddleware
             // captures it on `afterStep`. Encoded as JSON because
@@ -131,6 +137,89 @@
                 try await mw.afterRun(current, finalEvent: finalEvent)
             }
             continuation.finish()
+        }
+
+        /// Consume FoundationModels' native guided-generation stream —
+        /// the fast path, with mid-flight `.partial` snapshots.
+        private static func consumeFoundationModelsStructured<Content: Generable & Sendable>(
+            provider: FoundationModelsProvider,
+            messages: [Message],
+            type: Content.Type,
+            state: inout AgentState,
+            continuation: AsyncThrowingStream<StructuredResponseEvent<Content>, any Error>.Continuation
+        ) async throws -> Content? where Content.PartiallyGenerated: Sendable {
+            var finalContent: Content?
+            for try await event in provider.streamStructured(messages: messages, as: type) {
+                switch event {
+                case .partial:
+                    continuation.yield(event)
+                case let .toolCallExecuted(call, result):
+                    Self.recordToolCall(call: call, result: result, in: &state)
+                    continuation.yield(event)
+                case let .finish(content):
+                    finalContent = content
+                    continuation.yield(event)
+                }
+            }
+            return finalContent
+        }
+
+        /// Consume any `LLMProvider`'s `.textDelta` stream and JSON-decode
+        /// the accumulated text into `Content` via `GeneratedContent`.
+        ///
+        /// Forwards `.toolCallExecuted` events through to the structured
+        /// stream so providers that resolve tools server-side (e.g.
+        /// `NioraServerProvider`) surface the same UX shape as the FM
+        /// fast path. Other `ProviderEvent`s are framing-only and don't
+        /// have a `StructuredResponseEvent` equivalent — silently
+        /// dropped. No `.partial` snapshots fire on this path.
+        private func consumeGenericStructured<Content: Generable & Sendable>(
+            messages: [Message],
+            type: Content.Type,
+            state: inout AgentState,
+            continuation: AsyncThrowingStream<StructuredResponseEvent<Content>, any Error>.Continuation
+        ) async throws -> Content? where Content.PartiallyGenerated: Sendable {
+            let stream = self.config.provider.stream(
+                messages: messages,
+                tools: [],
+                options: self.config.generationOptions
+            )
+            var accumulated = ""
+            for try await event in stream {
+                try Task.checkCancellation()
+                switch event {
+                case let .textDelta(chunk):
+                    accumulated += chunk
+                case let .toolCallExecuted(call, result):
+                    Self.recordToolCall(call: call, result: result, in: &state)
+                    continuation.yield(.toolCallExecuted(call: call, result: result))
+                case .messageStart, .toolCallStart, .toolCallDelta, .toolCallEnd, .usage, .messageStop:
+                    // Framing / token-usage events have no
+                    // `StructuredResponseEvent` analogue; the final-text
+                    // decode below is what carries the contract.
+                    continue
+                }
+            }
+
+            let trimmed = accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw AgentError.providerFailed(
+                    "Provider yielded no text for Agent.respond(_:as: \(type)) — " +
+                        "structured-output decode needs at least one .textDelta.",
+                    underlying: nil
+                )
+            }
+            do {
+                let generated = try GeneratedContent(json: trimmed)
+                let value = try Content(generated)
+                continuation.yield(.finish(value))
+                return value
+            } catch {
+                throw AgentError.providerFailed(
+                    "Failed to decode \(type) from provider text: \(error)",
+                    underlying: ErrorBox(error)
+                )
+            }
         }
 
         // MARK: Helpers
