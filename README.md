@@ -8,9 +8,10 @@ The core is platform-agnostic and builds on Linux. Apple-specific implementation
 
 > **Status:** Layers 1–6 are implemented and tested on iOS 26 / macOS 26 / Linux. Headline features:
 >
-> - Tool-calling **Agent** with streaming events, middleware lifecycle (`HistoryMiddleware`, `RAGMiddleware`), and structured-output `respond(_:as:)` against FoundationModels.
+> - Tool-calling **Agent** with streaming events, the full middleware stack (history persistence, windowing, summarization, RAG retrieval, automatic fact extraction), and **provider-agnostic** structured-output `respond(_:as:)` that works against FoundationModels and any cloud `LLMProvider`.
 > - **StateGraph** with conditional edges, parallel branches + reducers, agent-as-node helpers, and resumable runs via the `Checkpointer`.
-> - **Memory layer** with persistent SQLite chat history + vector store (`GRDBChatHistory`, `GRDBVectorStore`) and `NLEmbeddingEmbedder` for on-device embeddings.
+> - **Memory layer** with persistent SQLite chat history + vector store (`GRDBChatHistory`, `GRDBVectorStore`), `NLEmbeddingEmbedder` for on-device embeddings, and `HistoryRetentionPolicy` for bounded disk growth.
+> - **Long-thread strategies that just compose**: `HistoryWindowMiddleware` (turns + token caps), `HistorySummarizationMiddleware` (compress older portion into a summary system message), `FactExtractionMiddleware` (auto-mine durable user facts into `MemoryStore`).
 > - **OpenTelemetry-compatible observability** via `swift-distributed-tracing` + `swift-metrics`. Spans use OTel GenAI semantic conventions; backends like Phoenix / Honeycomb auto-render the runs.
 > - **Session recording + replay** via `SessionRecorder` + `SessionReplayer` (in `AriaTesting`). Capture a run as a `SessionBundle` JSON, ship it anywhere, replay against a fresh agent for regression tests, prompt experiments, or debugging.
 
@@ -77,6 +78,87 @@ for try await event in agent.stream(.message(.user("What's the time in Tokyo?"))
     case let .toolCallRequested(call): print("[calling \(call.name)]")
     case .finish: print("\n[done]")
     default: break
+    }
+}
+```
+
+### Production-grade middleware stack
+
+Long-running threads need bounded context, a summary of older turns, and a
+durable memory layer. Compose the built-in middlewares — order matters
+(load → summarize → window → recall → extract):
+
+```swift
+import Aria
+import AriaApple
+
+let storage = try GRDBStorage()
+let embedder = NLEmbeddingEmbedder()!
+let memory = DefaultMemoryStore(
+    embedder: embedder,
+    store: storage.vectorStore(dimensions: embedder.dimensions)
+)
+
+let agent = Agent(config: AgentConfig(
+    provider: FoundationModelsProvider(),
+    tools: [],
+    systemPrompt: "You are a helpful assistant.",
+    threadId: "main",
+    middleware: [
+        // 1. Persistent transcript loaded from GRDB on beforeRun
+        HistoryMiddleware(history: storage.chatHistory),
+        // 2. Compress the older portion into a summary system message
+        //    once the thread grows past 24 non-system turns
+        HistorySummarizationMiddleware(
+            triggerAfterTurns: 24,
+            keepRecentTurns: 6,
+            summarizer: { messages in
+                // Typically a cheap LLM call (gpt-4o-mini, on-device 3B)
+                try await mySummarizer.summarize(messages)
+            }
+        ),
+        // 3. Hard window so the provider sees a bounded transcript
+        HistoryWindowMiddleware(maxTurns: 16, maxTokens: 4000),
+        // 4. Recall top-K user memories for the latest message
+        RAGMiddleware(memoryStore: memory, namespace: ["user", userId], topK: 5),
+        // 5. Auto-mine durable facts from each user turn (background)
+        FactExtractionMiddleware(
+            memory: memory,
+            namespace: ["user", userId],
+            extractor: { message in
+                try await myExtractor.facts(from: message)
+            }
+        ),
+    ]
+))
+
+// Bound disk growth across all threads — run on launch / nightly.
+try await HistoryRetentionPolicy(maxThreadAgeDays: 90, maxThreadCount: 20)
+    .enforce(on: storage.chatHistory)
+```
+
+### Structured output against any provider
+
+`Agent.respond(_:as:)` works against FoundationModels **and** any cloud
+`LLMProvider` — the agent layer derives the schema from the `Generable`
+type and injects it as `ResponseFormat.schema(...)` (or `.rawSchema(...)`
+for opaque JSON Schemas that don't round-trip through Aria's typed
+`JSONSchema`):
+
+```swift
+@Generable
+struct ActivitySuggestion {
+    var title: String
+    var summary: String
+    var steps: [String]
+}
+
+for try await event in agent.respond(.message(.user("Suggest something fun")),
+                                     as: ActivitySuggestion.self) {
+    switch event {
+    case .partial(let snapshot): render(snapshot)  // optionals fill in over time
+    case .finish(let suggestion): commit(suggestion)
+    case .toolCallExecuted: break
     }
 }
 ```

@@ -46,6 +46,27 @@ public enum ResponseFormat: Sendable {
     case text
     case json
     case schema(JSONSchema)
+    /// Opaque JSON Schema passthrough. Use when the schema you want to
+    /// hand to the provider doesn't round-trip cleanly through Aria's
+    /// typed `JSONSchema` model — e.g. a `Generable`-derived schema with
+    /// `$ref` / `$defs` constructs that the typed JSON Schema decoder
+    /// doesn't model. The provider serializes this as-is into its
+    /// `response_format` field on the wire.
+    case rawSchema(JSONValue)
+}
+```
+
+### Structured output across providers
+
+`Agent.respond(_:as: T.self)` derives the schema from any `@Generable` type and injects it into the provider's `GenerationOptions.responseFormat` automatically — typed `.schema(JSONSchema)` first, falling back to `.rawSchema(JSONValue)` when the typed encoder can't represent the FoundationModels-derived schema (nested generables with `$ref`s, etc.), and finally to `.json` for providers that don't honor the schema field. Same call works whether the underlying provider is `FoundationModelsProvider` (which uses `streamStructured(_:as:)` internally) or a cloud `LLMProvider` (which forwards `response_format` to the server).
+
+```swift
+@Generable struct Suggestion { var title: String; var steps: [String] }
+
+for try await event in agent.respond(.message(.user("Suggest something")),
+                                     as: Suggestion.self) {
+    if case .partial(let snapshot) = event { render(snapshot) }
+    if case .finish(let suggestion) = event { commit(suggestion) }
 }
 ```
 

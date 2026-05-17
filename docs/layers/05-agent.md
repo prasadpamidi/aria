@@ -92,11 +92,28 @@ Default no-op for each method; implementations override what they need.
 
 ### Built-in middleware (in `Aria`)
 
+Auto-installed by `Agent.init` when their dependencies are present:
+
 - `LoggingMiddleware` — emits `swift-log` lines for each step.
 - `CheckpointMiddleware` — writes a checkpoint after every step (if `checkpointer` is configured).
-- `HistoryMiddleware` — writes new messages to `ChatHistory` after every step (if `history` is configured).
+- `HistoryMiddleware` — loads persisted history on `beforeRun` and writes new messages to `ChatHistory` after every step (if `history` is configured).
 
-These three are auto-installed by `Agent.init` when their dependencies are present. Users add their own (`RAGMiddleware`, `FactExtractionMiddleware`, etc.).
+User-composable (you add these to `AgentConfig.middleware` as needed):
+
+- `HistoryWindowMiddleware(maxTurns:maxTokens:tokenCounter:)` — caps the message slice the provider sees per step. System messages always survive; tool messages stay paired with their assistant call; the most recent user/assistant pair always survives even if both caps want to drop them. Default token counter is a 4-chars-per-token heuristic; inject a real tokenizer when you need exact accounting. Pair with `HistoryMiddleware` (loads from store) — this middleware shapes what's sent on the wire, never persistence.
+- `HistorySummarizationMiddleware(triggerAfterTurns:keepRecentTurns:summarizer:)` — when the non-system message count exceeds `triggerAfterTurns`, compresses the older portion into a single `.system` summary message. The summarizer is a caller-supplied async closure that takes the older slice and returns the summary text (typically a cheap LLM call). Per-process result cache so re-running with the same slice doesn't re-summarize. Fail-open: a summarizer error leaves state untouched and the turn proceeds with the full transcript.
+- `RAGMiddleware(memoryStore:namespace:topK:onRecall:)` — on `beforeStep`, embeds the latest user message, recalls top-K matches from the per-user `MemoryStore` namespace, and prepends them as a fresh `.system` message. The optional `onRecall` callback lets the UI show which memories were injected.
+- `FactExtractionMiddleware(memory:namespace:dedupSimilarityThreshold:extractor:)` — on `afterStep`, scans the latest user message through a caller-supplied extractor (typically a cheap LLM) and writes returned facts into the `MemoryStore`. Optional similarity-based dedup against existing memories (default 0.9) so the same fact isn't stored twice. Stored facts get `metadata["source"] = "auto_extracted"` and `metadata["thread_id"]` for audit / different retention policies. Errors are swallowed — the user has already seen the reply.
+
+The typical chain on a chat surface that wants the full memory stack:
+
+1. `HistoryMiddleware` — load persisted history
+2. `HistorySummarizationMiddleware` — compress older portion
+3. `HistoryWindowMiddleware` — hard cap (belt-and-braces)
+4. `RAGMiddleware` — prepend recalled facts
+5. `FactExtractionMiddleware` — mine the user turn after the reply
+
+Pair with `HistoryRetentionPolicy` (Layer 4) on app launch to bound the disk side.
 
 ### Built-in middleware (in `AriaApple`)
 

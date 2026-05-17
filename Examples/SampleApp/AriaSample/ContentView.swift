@@ -425,10 +425,49 @@ struct ContentView: View {
             return DefaultMemoryStore(embedder: embedder, store: store)
         }
 
+        /// Production-grade middleware chain. Order matters:
+        ///   1. `HistoryMiddleware` — load persisted transcript from GRDB
+        ///      on `beforeRun`, then write each new message after every
+        ///      step.
+        ///   2. `HistorySummarizationMiddleware` — when the thread grows
+        ///      past `triggerAfterTurns`, compress the older portion
+        ///      into a single `.system` summary message. Sized small
+        ///      here (8 / 4) so the demo trips it after a handful of
+        ///      turns and you can see the behavior; production typical
+        ///      defaults are more like 24 / 6.
+        ///   3. `HistoryWindowMiddleware` — hard cap (turns + tokens)
+        ///      that ensures the provider sees a bounded slice even if
+        ///      summarization isn't enough.
+        ///   4. `RAGMiddleware` — recall top-K user memories for the
+        ///      latest message and prepend them as a system block.
+        ///   5. `FactExtractionMiddleware` — after each turn, mine
+        ///      durable facts from the latest user message and write
+        ///      them into the same `MemoryStore` RAG reads from.
+        ///   6. `RecordingMiddleware` — last, so it observes the
+        ///      final agent stream events.
+        ///
+        /// The summarizer and extractor closures call the on-device
+        /// FoundationModels model directly via a fresh, history-less
+        /// agent — keeps the auxiliary work on-device and avoids
+        /// recursing through the main agent's middleware stack.
         private func makeMiddleware(memory: (any MemoryStore)?) -> [any AgentMiddleware] {
             var middlewares: [any AgentMiddleware] = [
                 HistoryMiddleware(history: self.storage.chatHistory),
             ]
+            #if canImport(FoundationModels)
+                if #available(iOS 26.0, macOS 26.0, *) {
+                    middlewares.append(
+                        HistorySummarizationMiddleware(
+                            triggerAfterTurns: 8,
+                            keepRecentTurns: 4,
+                            summarizer: Self.makeAuxiliarySummarizer()
+                        )
+                    )
+                }
+            #endif
+            middlewares.append(
+                HistoryWindowMiddleware(maxTurns: 16, maxTokens: 4000)
+            )
             if let memory {
                 let probe = self.memoryProbe
                 middlewares.append(
@@ -442,6 +481,17 @@ struct ContentView: View {
                         }
                     )
                 )
+                #if canImport(FoundationModels)
+                    if #available(iOS 26.0, macOS 26.0, *) {
+                        middlewares.append(
+                            FactExtractionMiddleware(
+                                memory: memory,
+                                namespace: Self.memoryNamespace,
+                                extractor: Self.makeAuxiliaryFactExtractor()
+                            )
+                        )
+                    }
+                #endif
             }
             let recording = RecordingMiddleware(recorder: self.sessionRecorder)
             recording.bind(
@@ -451,6 +501,98 @@ struct ContentView: View {
             )
             middlewares.append(recording)
             return middlewares
+        }
+
+        /// Build the summarizer closure `HistorySummarizationMiddleware`
+        /// hands the older portion of a thread to. Runs a fresh,
+        /// history-less FoundationModels agent so the auxiliary call
+        /// doesn't recurse back through the main middleware chain (which
+        /// would re-trigger summarization on the summarizer's input).
+        @available(iOS 26.0, macOS 26.0, *)
+        private static func makeAuxiliarySummarizer() -> @Sendable ([Message]) async throws -> String {
+            { messages in
+                let serialized = messages.map { msg -> String in
+                    let role = msg.role == .user
+                        ? "User"
+                        : (msg.role == .assistant ? "Assistant" : "System")
+                    return "\(role): \(msg.textContent)"
+                }.joined(separator: "\n\n")
+                let prompt = """
+                Summarize the conversation below in <=200 words, preserving:
+                - durable user facts (preferences, goals, constraints, schedule)
+                - decisions the assistant made
+                - open threads / unresolved questions
+
+                Return ONLY the summary text — no preamble, no headers, no markdown.
+
+                Conversation:
+                \(serialized)
+                """
+                return try await Self.runAuxiliaryCompletion(
+                    systemPrompt: "You are a precise conversation summarizer. Output only the summary.",
+                    userText: prompt
+                )
+            }
+        }
+
+        /// Build the extractor closure `FactExtractionMiddleware` calls
+        /// with the latest user message. Returns the list of fact
+        /// strings the middleware stores; empty list means "nothing
+        /// durable worth saving."
+        @available(iOS 26.0, macOS 26.0, *)
+        private static func makeAuxiliaryFactExtractor() -> @Sendable (Message) async throws -> [String] {
+            { message in
+                let prompt = """
+                Extract durable facts about the user from the message below. \
+                A "durable fact" is something likely to remain true across \
+                many sessions: preferences, goals, constraints, schedule, \
+                equipment. NOT one-off questions, current state, or emotions.
+
+                Return ONLY a JSON array of short fact strings. \
+                Examples: ["user prefers metric units", "user is vegetarian"]. \
+                Empty array if nothing durable. NO prose, NO markdown — JUST the array.
+
+                Message: \(message.textContent)
+                """
+                let raw = try await Self.runAuxiliaryCompletion(
+                    systemPrompt: "You are a precise fact extractor. Output only a JSON array of strings.",
+                    userText: prompt
+                )
+                let cleaned = raw
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .replacingOccurrences(of: "```json", with: "")
+                    .replacingOccurrences(of: "```", with: "")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let data = cleaned.data(using: .utf8),
+                      let array = try? JSONSerialization.jsonObject(with: data) as? [String]
+                else {
+                    return []
+                }
+                return array.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            }
+        }
+
+        /// One-shot auxiliary completion via a fresh FoundationModels
+        /// agent — no middleware, no history. Used by both the
+        /// summarizer and the extractor.
+        @available(iOS 26.0, macOS 26.0, *)
+        private static func runAuxiliaryCompletion(
+            systemPrompt: String,
+            userText: String
+        ) async throws -> String {
+            let agent = Agent(config: AgentConfig(
+                provider: FoundationModelsProvider(defaultInstructions: systemPrompt),
+                tools: [],
+                systemPrompt: systemPrompt,
+                threadId: "aria-sample-aux-\(UUID().uuidString)"
+            ))
+            var accumulated = ""
+            for try await event in agent.stream(.message(.user(userText))) {
+                if case let .textDelta(text) = event {
+                    accumulated += text
+                }
+            }
+            return accumulated.trimmingCharacters(in: .whitespacesAndNewlines)
         }
 
         private static func systemPrompt(memoryEnabled: Bool) -> String {

@@ -1,3 +1,4 @@
+import Aria
 import AriaApple
 import SwiftData
 import SwiftUI
@@ -7,7 +8,21 @@ struct AriaSampleApp: App {
     // MARK: Lifecycle
 
     init() {
-        self.storageResult = Self.loadStorage()
+        let result = Self.loadStorage()
+        self.storageResult = result
+        // Bound chat-history disk growth across all threads — runs
+        // once per launch, idempotent. Pair with the agent-side
+        // `HistoryWindowMiddleware` / `HistorySummarizationMiddleware`
+        // (which bound the wire side) for the full memory story.
+        if case let .success(storage) = result {
+            Task.detached(priority: .background) {
+                let policy = HistoryRetentionPolicy(
+                    maxThreadAgeDays: 90,
+                    maxThreadCount: 20
+                )
+                _ = try? await policy.enforce(on: storage.chatHistory)
+            }
+        }
     }
 
     // MARK: Internal
