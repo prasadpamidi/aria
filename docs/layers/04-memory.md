@@ -9,7 +9,13 @@ Memory in Aria is split into four orthogonal protocols, each addressing one conc
 | `VectorStore` | Similarity search over embeddings | App-managed |
 | `MemoryStore` | High-level "remember/recall" | Forever, namespaced |
 
-The agent layer (Layer 5) consumes these via injection. None are required; agents work without memory.
+Plus one stateless **policy** that prunes the disk side:
+
+| Type | Concern | Lifetime |
+|---|---|---|
+| `HistoryRetentionPolicy` | Whole-thread eviction by age + count | One-shot, idempotent |
+
+The agent layer (Layer 5) consumes these via injection. None are required; agents work without memory. **Shaping the message slice the provider sees per step is a middleware concern** (`HistoryWindowMiddleware`, `HistorySummarizationMiddleware`) — see Layer 5.
 
 ## `ChatHistory`
 
@@ -217,7 +223,50 @@ public struct DefaultMemoryStore: MemoryStore {
 
 This sits in `Aria` (core) because it's pure protocol composition. Apple platforms get `DefaultMemoryStore(embedder: NLEmbeddingEmbedder(), store: SQLiteVecVectorStore(...))`.
 
-## `HistoryPolicy`
+## `HistoryRetentionPolicy`
+
+Stateless policy that bounds the **disk** side of `ChatHistory`. Complements the agent-layer middlewares (`HistoryWindowMiddleware`, `HistorySummarizationMiddleware`) which bound the **wire** side.
+
+```swift
+public struct HistoryRetentionPolicy: Sendable {
+    public init(
+        maxThreadAgeDays: Double? = nil,
+        maxThreadCount: Int? = nil
+    )
+
+    @discardableResult
+    public func enforce(on history: any ChatHistory) async throws -> Report
+
+    public struct Report: Sendable, Equatable {
+        public var threadsRemovedForAge: [String]
+        public var threadsRemovedForCount: [String]
+    }
+}
+```
+
+**Whole-thread eviction.** `ChatHistory`'s public surface only supports `clear(threadId:)` — drop a whole conversation, not "drop oldest N messages." That's deliberate: per-thread compaction is a middleware concern (`HistorySummarizationMiddleware`); per-thread eviction is the storage concern.
+
+- `maxThreadAgeDays` — a thread whose newest message is older than this gets cleared. Last-activity eviction.
+- `maxThreadCount` — after age eviction, if more threads remain than the cap, the oldest-activity threads are dropped until the count fits. LRU-by-last-activity.
+
+**When to run it.** Not on every agent step — too much I/O. The caller decides:
+
+- On app startup (once per process)
+- As a scheduled background job (e.g. daily)
+- On low-disk-pressure system signals
+
+The policy is stateless and idempotent; calling `enforce(on:)` twice in a row drops the same set the first call drops, then nothing.
+
+```swift
+try await HistoryRetentionPolicy(
+    maxThreadAgeDays: 90,    // expire threads inactive >90 days
+    maxThreadCount: 20       // keep at most 20 threads
+).enforce(on: storage.chatHistory)
+```
+
+## `HistoryPolicy` *(legacy enum — prefer the middlewares)*
+
+> `HistoryPolicy` is still on `AgentConfig` for backward compatibility, but the recommended approach is to compose the dedicated middlewares (`HistoryWindowMiddleware`, `HistorySummarizationMiddleware`) in `AgentConfig.middleware`. The middleware path gives more control (token-budget caps, dedicated summarizer caching, fail-open behavior) and composes cleanly with the rest of the chain.
 
 Not a memory protocol — a strategy for selecting which messages from `ChatHistory` to send to the model.
 
