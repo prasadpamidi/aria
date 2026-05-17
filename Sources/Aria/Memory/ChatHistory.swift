@@ -93,7 +93,13 @@ public actor InMemoryChatHistory: ChatHistory {
     }
 
     public func clear(threadId: String) async throws {
-        self.store[threadId] = []
+        // Remove the key entirely (not just empty the array) so the
+        // thread disappears from `threads()`. Matches
+        // `GRDBChatHistory.clear`, whose `SELECT DISTINCT threadId
+        // FROM messages` returns nothing after a delete — and matches
+        // `HistoryRetentionPolicy`'s expectation that a cleared
+        // thread is gone, not just inert.
+        self.store.removeValue(forKey: threadId)
     }
 
     public func threads() async throws -> [String] {
