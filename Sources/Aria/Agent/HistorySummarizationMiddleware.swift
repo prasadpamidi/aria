@@ -65,6 +65,7 @@ public struct HistorySummarizationMiddleware: AgentMiddleware {
         self.triggerAfterTurns = triggerAfterTurns
         self.keepRecentTurns = keepRecentTurns
         self.summarizer = summarizer
+        self.cache = SummaryCache()
     }
 
     // MARK: Public
@@ -93,6 +94,17 @@ public struct HistorySummarizationMiddleware: AgentMiddleware {
         let older = Array(nonSystem.prefix(pivot))
         let recent = Array(nonSystem.suffix(self.keepRecentTurns))
 
+        // Cache check: keyed on (threadId, hash of older slice text).
+        // A cache hit reuses the cached `summaryMessage` verbatim —
+        // including its `createdAt` — so consecutive `beforeStep`
+        // calls with the same older slice produce identical state.
+        let olderHash = Self.olderSliceHash(older)
+        if let cached = self.cache.get(threadId: state.threadId, olderSliceHash: olderHash) {
+            var newState = state
+            newState.messages = systems + [cached] + recent
+            return newState
+        }
+
         // Summarize. Fail-open: any error leaves state untouched.
         let summary: String
         do {
@@ -104,6 +116,11 @@ public struct HistorySummarizationMiddleware: AgentMiddleware {
         let summaryMessage = Message.system(
             "Earlier conversation summary:\n\(summary)"
         )
+        self.cache.put(
+            threadId: state.threadId,
+            olderSliceHash: olderHash,
+            summaryMessage: summaryMessage
+        )
         var newState = state
         newState.messages = systems + [summaryMessage] + recent
         return newState
@@ -114,4 +131,64 @@ public struct HistorySummarizationMiddleware: AgentMiddleware {
     private let triggerAfterTurns: Int
     private let keepRecentTurns: Int
     private let summarizer: @Sendable ([Message]) async throws -> String
+    private let cache: SummaryCache
+
+    /// Stable hash over the text content of the older slice. Used
+    /// as the cache key so a slice that exactly matches a prior call
+    /// reuses the summary verbatim. Includes roles so a
+    /// user/assistant ordering swap invalidates the cache.
+    private static func olderSliceHash(_ messages: [Message]) -> Int {
+        var hasher = Hasher()
+        for message in messages {
+            hasher.combine(message.role.rawValue)
+            hasher.combine(message.textContent)
+        }
+        return hasher.finalize()
+    }
+}
+
+// MARK: - SummaryCache
+
+/// Per-process LRU-ish cache of summary messages, keyed on
+/// `(threadId, hash-of-older-slice)`. Reference-typed so the enclosing
+/// `HistorySummarizationMiddleware` struct can mutate it from
+/// non-mutating methods.
+///
+/// One entry per `threadId` is enough — a new older-slice hash
+/// overwrites the prior cached summary for that thread. (When the
+/// slice changes, the prior summary is stale anyway.)
+///
+/// `@unchecked Sendable` because the lock guarantees serialized
+/// access; Swift 6's checker can't infer that from `NSLock`.
+private final class SummaryCache: @unchecked Sendable {
+    // MARK: Internal
+
+    func get(threadId: String, olderSliceHash: Int) -> Message? {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        guard let entry = self.entries[threadId],
+              entry.olderSliceHash == olderSliceHash else {
+            return nil
+        }
+        return entry.summaryMessage
+    }
+
+    func put(threadId: String, olderSliceHash: Int, summaryMessage: Message) {
+        self.lock.lock()
+        defer { self.lock.unlock() }
+        self.entries[threadId] = Entry(
+            olderSliceHash: olderSliceHash,
+            summaryMessage: summaryMessage
+        )
+    }
+
+    // MARK: Private
+
+    private struct Entry {
+        let olderSliceHash: Int
+        let summaryMessage: Message
+    }
+
+    private let lock = NSLock()
+    private var entries: [String: Entry] = [:]
 }
