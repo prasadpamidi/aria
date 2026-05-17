@@ -70,6 +70,59 @@
             XCTAssertEqual(resolved.speaker, "Captain Ada")
         }
 
+        func testAgentRespondInjectsSchemaIntoResponseFormatForNonFMProvider() async throws {
+            // Regression: `consumeGenericStructured` must derive a JSONSchema
+            // from `Content.generationSchema` and inject it into
+            // `GenerationOptions.responseFormat` so cloud / MLX / Ollama
+            // providers can request structured output server-side. Without
+            // this they'd see a free-text request and return prose, and the
+            // final decode would fail.
+            let captor = OptionsCapturingProvider(chunks: [
+                #"{"text":"go","speaker":"x"}"#
+            ])
+            let agent = Agent(config: AgentConfig(
+                provider: captor,
+                tools: [],
+                threadId: "t"
+            ))
+            for try await _ in agent.respond(.message(.user("hi")), as: TestQuote.self) { }
+
+            let capturedFormat = try XCTUnwrap(
+                captor.lastOptions?.responseFormat,
+                "Expected `responseFormat` to be injected before provider.stream"
+            )
+            guard case let .schema(schema) = capturedFormat else {
+                XCTFail("Expected .schema, got \(capturedFormat)")
+                return
+            }
+            // Verify it's the TestQuote schema specifically — `text` +
+            // `speaker` both required string properties.
+            guard case let .object(properties, required, _, _) = schema else {
+                XCTFail("Expected object schema, got \(schema)")
+                return
+            }
+            XCTAssertNotNil(properties["text"], "Missing `text` property")
+            XCTAssertNotNil(properties["speaker"], "Missing `speaker` property")
+            XCTAssertTrue(required.contains("text"))
+            XCTAssertTrue(required.contains("speaker"))
+        }
+
+        func testAgentRespondPreservesCallerSuppliedResponseFormat() async throws {
+            // If the caller already set `responseFormat` on the agent's
+            // generationOptions, the derivation must not overwrite it.
+            let captor = OptionsCapturingProvider(chunks: [
+                #"{"text":"go","speaker":"x"}"#
+            ])
+            let agent = Agent(config: AgentConfig(
+                provider: captor,
+                tools: [],
+                threadId: "t",
+                generationOptions: GenerationOptions(responseFormat: .json)
+            ))
+            for try await _ in agent.respond(.message(.user("hi")), as: TestQuote.self) { }
+            XCTAssertEqual(captor.lastOptions?.responseFormat, .json)
+        }
+
         func testAgentRespondThrowsProviderFailedWhenNonFMProviderEmitsNoText() async {
             // Edge case for the generic path: a provider that yields only
             // framing events (and no `.textDelta`s) leaves the accumulator
@@ -199,6 +252,51 @@
     /// Emits a leading `.messageStart`, each chunk as a `.textDelta`, then
     /// `.messageStop(.endTurn)`. Lets the test drive the generic
     /// `consumeGenericStructured` path with deterministic, pre-canned JSON.
+    /// Captures the `GenerationOptions` passed to `stream(...)` for
+    /// assertion. Wraps the same `JSONStreamingProvider` body so the
+    /// agent's structured-output loop still completes.
+    @available(iOS 26.0, macOS 26.0, *)
+    private final class OptionsCapturingProvider: LLMProvider, @unchecked Sendable {
+        // MARK: Lifecycle
+
+        init(chunks: [String]) {
+            self.chunks = chunks
+        }
+
+        // MARK: Internal
+
+        let chunks: [String]
+        var lastOptions: Aria.GenerationOptions?
+
+        let capabilities = ProviderCapabilities(
+            modelIdentifier: "test.options-capturing",
+            supportsStreaming: true,
+            supportsToolUse: false,
+            supportsParallelToolCalls: false,
+            supportsVision: false,
+            supportsAudio: false,
+            supportsStructuredOutput: true,
+            supportsSystemPrompt: true,
+            maxContextTokens: nil
+        )
+
+        func stream(
+            messages _: [Message],
+            tools _: [ToolDefinition],
+            options: Aria.GenerationOptions
+        ) -> AsyncThrowingStream<ProviderEvent, any Error> {
+            self.lastOptions = options
+            return AsyncThrowingStream { continuation in
+                continuation.yield(.messageStart(messageId: "msg-1"))
+                for chunk in self.chunks {
+                    continuation.yield(.textDelta(chunk))
+                }
+                continuation.yield(.messageStop(.endTurn))
+                continuation.finish()
+            }
+        }
+    }
+
     private struct JSONStreamingProvider: LLMProvider {
         let chunks: [String]
 

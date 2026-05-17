@@ -179,10 +179,21 @@
             state: inout AgentState,
             continuation: AsyncThrowingStream<StructuredResponseEvent<Content>, any Error>.Continuation
         ) async throws -> Content? where Content.PartiallyGenerated: Sendable {
+            // Derive a JSONSchema from `Content.generationSchema` and inject
+            // it into `responseFormat` so cloud/MLX/Ollama providers can
+            // request structured output server-side. Without this they'd
+            // see a free-text request and the JSON decode below would fail
+            // on prose.
+            //
+            // Caller-supplied `responseFormat` wins — keep the override
+            // path open for tests and for callers that want to use `.json`
+            // (free-form JSON) instead of a strict schema.
+            var options = self.config.generationOptions
+            options.responseFormat = options.responseFormat ?? Self.deriveResponseFormat(for: type)
             let stream = self.config.provider.stream(
                 messages: messages,
                 tools: [],
-                options: self.config.generationOptions
+                options: options
             )
             var accumulated = ""
             for try await event in stream {
@@ -271,6 +282,31 @@
             // an Encodable conformance the consumer's @Generable type
             // may not have.
             value.generatedContent.jsonString
+        }
+
+        /// Build an Aria `ResponseFormat` from a `Generable` type's
+        /// `generationSchema`. Used by `consumeGenericStructured` to
+        /// request schema-conforming output from non-FoundationModels
+        /// providers (cloud completions endpoints, MLX, Ollama).
+        ///
+        /// Round-trips through JSON: `GenerationSchema` encodes to a
+        /// JSON-Schema-shaped dictionary, `JSONSchema` decodes the same
+        /// shape (its Codable accepts standard JSON Schema). On any
+        /// conversion failure (e.g. FM emits a field Aria's `JSONSchema`
+        /// enum doesn't model — a regex `pattern`, a `$ref`), fall back
+        /// to `.json` so the provider still asks for JSON instead of
+        /// prose. Better to lose schema strictness than to silently
+        /// degrade to text.
+        private static func deriveResponseFormat<Content: Generable>(
+            for _: Content.Type
+        ) -> ResponseFormat {
+            do {
+                let encoded = try JSONEncoder().encode(Content.generationSchema)
+                let schema = try JSONDecoder().decode(JSONSchema.self, from: encoded)
+                return .schema(schema)
+            } catch {
+                return .json
+            }
         }
 
         private static func renderJSONValue(_ value: JSONValue) -> String {
