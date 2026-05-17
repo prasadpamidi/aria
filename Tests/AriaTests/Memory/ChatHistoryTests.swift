@@ -61,6 +61,19 @@ final class InMemoryChatHistoryTests: XCTestCase {
         XCTAssertEqual(t2.map(\.textContent), ["b"])
     }
 
+    func testClearRemovesThreadFromThreadsList() async throws {
+        // `clear(threadId:)` should remove the thread entirely — not
+        // just empty it. Matches `GRDBChatHistory` semantics and lets
+        // `HistoryRetentionPolicy` actually shrink the store.
+        let history = InMemoryChatHistory()
+        try await history.append(.user("a"), threadId: "t1")
+        try await history.append(.user("b"), threadId: "t2")
+        try await history.clear(threadId: "t1")
+
+        let threads = try await history.threads()
+        XCTAssertEqual(threads, ["t2"])
+    }
+
     func testThreadsListsOnlyKnownIds() async throws {
         let history = InMemoryChatHistory()
         try await history.append(.user("x"), threadId: "alpha")
