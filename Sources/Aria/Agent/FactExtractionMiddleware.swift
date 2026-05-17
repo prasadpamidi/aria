@@ -57,10 +57,12 @@ public struct FactExtractionMiddleware: AgentMiddleware {
     public init(
         memory: any MemoryStore,
         namespace: [String],
+        dedupSimilarityThreshold: Float? = 0.9,
         extractor: @escaping @Sendable (Message) async throws -> [String]
     ) {
         self.memory = memory
         self.namespace = namespace
+        self.dedupSimilarityThreshold = dedupSimilarityThreshold
         self.extractor = extractor
     }
 
@@ -86,6 +88,17 @@ public struct FactExtractionMiddleware: AgentMiddleware {
         }
 
         for fact in facts {
+            // Dedup: before writing, query the store for similar
+            // existing memories. If anything in memory matches above
+            // the configured threshold, skip — RAG recall would
+            // surface that fact anyway, and a near-dup just clutters
+            // the user's memories list. Skipped entirely when the
+            // threshold is nil (legacy / opt-out behavior).
+            if let threshold = self.dedupSimilarityThreshold,
+               try await self.isDuplicate(fact, threshold: threshold) {
+                continue
+            }
+
             let metadata: [String: JSONValue] = [
                 "source": .string("auto_extracted"),
                 "thread_id": .string(state.threadId)
@@ -110,5 +123,28 @@ public struct FactExtractionMiddleware: AgentMiddleware {
 
     private let memory: any MemoryStore
     private let namespace: [String]
+    private let dedupSimilarityThreshold: Float?
     private let extractor: @Sendable (Message) async throws -> [String]
+
+    /// True when something in memory matches `fact` above the
+    /// threshold. A recall failure (e.g. embedder unavailable) treats
+    /// the fact as non-duplicate — better to record a near-dup than
+    /// silently lose a fact because recall transiently failed.
+    private func isDuplicate(_ fact: String, threshold: Float) async throws -> Bool {
+        let matches: [MemoryMatch]
+        do {
+            matches = try await self.memory.recall(
+                query: fact,
+                namespace: self.namespace,
+                topK: 1,
+                filter: nil
+            )
+        } catch {
+            return false
+        }
+        guard let top = matches.first else {
+            return false
+        }
+        return top.score >= threshold
+    }
 }

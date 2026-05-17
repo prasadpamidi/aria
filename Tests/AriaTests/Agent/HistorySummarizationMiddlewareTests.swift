@@ -187,6 +187,88 @@ final class HistorySummarizationMiddlewareTests: XCTestCase {
         XCTAssertEqual(calls, 0)
     }
 
+    // MARK: - Summary caching
+
+    func testReusesCachedSummaryWhenOlderSliceUnchanged() async throws {
+        // Two `beforeStep` calls in a row with the SAME older slice
+        // should only invoke the summarizer once — the cached
+        // summary is reused on the second call.
+        let summarizer = RecordingSummarizer(summary: "compressed")
+        let middleware = self.makeMiddleware(
+            summarizer: summarizer,
+            triggerAfterTurns: 3,
+            keepRecentTurns: 1
+        )
+        let messages = (0..<5).map { Message.user("m-\($0)") }
+        let state = AgentState(threadId: "t", messages: messages)
+        _ = try await middleware.beforeStep(state)
+        _ = try await middleware.beforeStep(state)
+        let calls = await summarizer.invocations.count
+        XCTAssertEqual(calls, 1, "expected cache hit on second beforeStep")
+    }
+
+    func testInvalidatesCacheWhenOlderSliceChanges() async throws {
+        // Different older content → cache miss → re-summarize.
+        let summarizer = RecordingSummarizer(summary: "compressed")
+        let middleware = self.makeMiddleware(
+            summarizer: summarizer,
+            triggerAfterTurns: 3,
+            keepRecentTurns: 1
+        )
+        let firstState = AgentState(
+            threadId: "t",
+            messages: (0..<5).map { Message.user("m-\($0)") }
+        )
+        let secondState = AgentState(
+            threadId: "t",
+            messages: (0..<5).map { Message.user("different-\($0)") }
+        )
+        _ = try await middleware.beforeStep(firstState)
+        _ = try await middleware.beforeStep(secondState)
+        let calls = await summarizer.invocations.count
+        XCTAssertEqual(calls, 2)
+    }
+
+    func testCacheIsKeyedPerThreadId() async throws {
+        // Two threads with identical older slices should each get
+        // their own cache entry — a coach session's summary must
+        // never leak into a recipe session.
+        let summarizer = RecordingSummarizer(summary: "compressed")
+        let middleware = self.makeMiddleware(
+            summarizer: summarizer,
+            triggerAfterTurns: 3,
+            keepRecentTurns: 1
+        )
+        let messages = (0..<5).map { Message.user("m-\($0)") }
+        let coachState = AgentState(threadId: "coach", messages: messages)
+        let recipeState = AgentState(threadId: "recipe", messages: messages)
+        _ = try await middleware.beforeStep(coachState)
+        _ = try await middleware.beforeStep(recipeState)
+        // Two different threadIds → two summarizer calls even though
+        // the older slice text is identical.
+        let calls = await summarizer.invocations.count
+        XCTAssertEqual(calls, 2)
+    }
+
+    func testCachedSummaryProducesSameOutputAsRecomputed() async throws {
+        // The reused-from-cache result must be byte-equivalent to
+        // re-summarizing from scratch. Otherwise the state diverges
+        // between the first and subsequent calls.
+        let summarizer = RecordingSummarizer(summary: "exact summary text")
+        let middleware = self.makeMiddleware(
+            summarizer: summarizer,
+            triggerAfterTurns: 3,
+            keepRecentTurns: 1
+        )
+        let state = AgentState(
+            threadId: "t",
+            messages: (0..<5).map { Message.user("m-\($0)") }
+        )
+        let first = try await middleware.beforeStep(state)
+        let second = try await middleware.beforeStep(state)
+        XCTAssertEqual(first.messages, second.messages)
+    }
+
     // MARK: - State preservation
 
     func testPreservesOtherStateFields() async throws {

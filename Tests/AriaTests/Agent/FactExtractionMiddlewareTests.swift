@@ -135,6 +135,57 @@ final class FactExtractionMiddlewareTests: XCTestCase {
         XCTAssertEqual(stored[0].metadata["thread_id"], .string("specific-thread"))
     }
 
+    func testSkipsFactsAlreadyPresentAboveSimilarityThreshold() async throws {
+        // A fact that's already in memory at similarity 0.95 should
+        // be dropped — no point storing a near-duplicate that RAG
+        // recall would have surfaced anyway.
+        let extractor = RecordingExtractor(facts: ["user is vegetarian"])
+        let memory = RecordingMemoryWithRecall(recallScore: 0.95)
+        let middleware = FactExtractionMiddleware(
+            memory: memory,
+            namespace: ["user"],
+            dedupSimilarityThreshold: 0.9,
+            extractor: { _ in ["user is vegetarian"] }
+        )
+        let state = AgentState(threadId: "t", messages: [.user("anything")])
+        _ = try await middleware.afterStep(state)
+        let stored = await memory.remembered.count
+        XCTAssertEqual(stored, 0)
+    }
+
+    func testWritesFactsBelowSimilarityThreshold() async throws {
+        // A fact only weakly similar (0.5) to anything in memory is
+        // genuinely new — write it.
+        let extractor = RecordingExtractor(facts: ["user is vegetarian"])
+        let memory = RecordingMemoryWithRecall(recallScore: 0.5)
+        let middleware = FactExtractionMiddleware(
+            memory: memory,
+            namespace: ["user"],
+            dedupSimilarityThreshold: 0.9,
+            extractor: { _ in ["user is vegetarian"] }
+        )
+        let state = AgentState(threadId: "t", messages: [.user("anything")])
+        _ = try await middleware.afterStep(state)
+        let stored = await memory.remembered.map(\.content)
+        XCTAssertEqual(stored, ["user is vegetarian"])
+    }
+
+    func testDedupDisabledWhenThresholdIsNil() async throws {
+        // Nil threshold = no dedup pass — write everything the
+        // extractor returns. Matches pre-dedup behavior.
+        let memory = RecordingMemoryWithRecall(recallScore: 0.99)
+        let middleware = FactExtractionMiddleware(
+            memory: memory,
+            namespace: ["user"],
+            dedupSimilarityThreshold: nil,
+            extractor: { _ in ["near dup fact"] }
+        )
+        let state = AgentState(threadId: "t", messages: [.user("anything")])
+        _ = try await middleware.afterStep(state)
+        let stored = await memory.remembered.count
+        XCTAssertEqual(stored, 1)
+    }
+
     // MARK: - State preservation
 
     func testReturnsStateUnchangedWhenExtractionSucceeds() async throws {
@@ -154,6 +205,47 @@ final class FactExtractionMiddlewareTests: XCTestCase {
     }
 
     // MARK: Private
+
+    // MARK: - Dedup against existing memories
+
+    /// Mock memory store with controllable recall scores — lets us
+    /// drive the dedup branch deterministically.
+    private actor RecordingMemoryWithRecall: MemoryStore {
+        // MARK: Lifecycle
+
+        init(recallScore: Float, recallContent: String = "existing similar fact") {
+            self.recallScore = recallScore
+            self.recallContent = recallContent
+        }
+
+        // MARK: Internal
+
+        private(set) var remembered: [MemoryItem] = []
+
+        func remember(_ item: MemoryItem, namespace: [String]) async throws -> MemoryRef {
+            self.remembered.append(item)
+            return MemoryRef(id: item.id, namespace: namespace)
+        }
+
+        func recall(
+            query _: String,
+            namespace _: [String],
+            topK _: Int,
+            filter _: VectorFilter?
+        ) async throws -> [MemoryMatch] {
+            [MemoryMatch(item: MemoryItem(content: self.recallContent), score: self.recallScore)]
+        }
+
+        func forget(id _: String, namespace _: [String]) async throws { }
+        func list(namespace _: [String], limit _: Int) async throws -> [MemoryItem] {
+            self.remembered
+        }
+
+        // MARK: Private
+
+        private let recallScore: Float
+        private let recallContent: String
+    }
 
     // MARK: - Test helpers
 
