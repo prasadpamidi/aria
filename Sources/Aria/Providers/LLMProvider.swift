@@ -150,4 +150,16 @@ public enum ResponseFormat: Sendable, Equatable {
     case json
     /// JSON conforming to a specific schema.
     case schema(JSONSchema)
+    /// JSON conforming to an opaque JSON Schema dict. Escape hatch for
+    /// schemas Aria's typed `JSONSchema` enum can't round-trip (e.g.
+    /// FoundationModels' `GenerationSchema` for a `Generable` with
+    /// nested array-of-Generable fields, which encodes using `$ref` /
+    /// `$defs` — features the typed enum doesn't model).
+    ///
+    /// Providers should serialize the wrapped `JSONValue` as JSON in
+    /// whatever vendor-specific schema slot they use. Equivalent to
+    /// `.schema(...)` for transport purposes; the difference is that
+    /// `.schema` carries the typed model (manipulable, inspectable) and
+    /// `.rawSchema` is a passthrough for shapes outside that model.
+    case rawSchema(JSONValue)
 }
