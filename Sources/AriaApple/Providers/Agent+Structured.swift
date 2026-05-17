@@ -289,24 +289,37 @@
         /// request schema-conforming output from non-FoundationModels
         /// providers (cloud completions endpoints, MLX, Ollama).
         ///
-        /// Round-trips through JSON: `GenerationSchema` encodes to a
-        /// JSON-Schema-shaped dictionary, `JSONSchema` decodes the same
-        /// shape (its Codable accepts standard JSON Schema). On any
-        /// conversion failure (e.g. FM emits a field Aria's `JSONSchema`
-        /// enum doesn't model — a regex `pattern`, a `$ref`), fall back
-        /// to `.json` so the provider still asks for JSON instead of
-        /// prose. Better to lose schema strictness than to silently
-        /// degrade to text.
+        /// Three-step fallback so the strongest available form always
+        /// wins:
+        ///   1. Encode `GenerationSchema` to JSON, decode through Aria's
+        ///      typed `JSONSchema`. Best — providers can inspect the
+        ///      typed model.
+        ///   2. If typed decode fails (FM emits `$ref` / `$defs` for
+        ///      nested Generables, or a feature outside Aria's enum),
+        ///      decode the same JSON as a generic `JSONValue` and
+        ///      return `.rawSchema(...)`. Providers serialize it
+        ///      verbatim into their vendor-specific schema slot —
+        ///      schema enforcement is preserved.
+        ///   3. If even raw decoding fails (shouldn't happen — FM
+        ///      emits valid JSON), fall back to `.json` (free-form
+        ///      JSON). The provider still asks for JSON, just without
+        ///      a schema. Better than prose.
         private static func deriveResponseFormat<Content: Generable>(
             for _: Content.Type
         ) -> ResponseFormat {
+            let encoded: Data
             do {
-                let encoded = try JSONEncoder().encode(Content.generationSchema)
-                let schema = try JSONDecoder().decode(JSONSchema.self, from: encoded)
-                return .schema(schema)
+                encoded = try JSONEncoder().encode(Content.generationSchema)
             } catch {
                 return .json
             }
+            if let typed = try? JSONDecoder().decode(JSONSchema.self, from: encoded) {
+                return .schema(typed)
+            }
+            if let raw = try? JSONDecoder().decode(JSONValue.self, from: encoded) {
+                return .rawSchema(raw)
+            }
+            return .json
         }
 
         private static func renderJSONValue(_ value: JSONValue) -> String {
