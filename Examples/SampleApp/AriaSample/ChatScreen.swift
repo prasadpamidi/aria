@@ -141,57 +141,79 @@ struct ChatScreen: View {
         .padding(.top, 80)
     }
 
+    /// Niora-style input bar: a single glass capsule containing the
+    /// attach button (when vision-capable), the text field, and the
+    /// send button. Buttons are 36pt circles with `fillTertiary`
+    /// backgrounds when idle; the send button switches to
+    /// accent-tinted when there's text or an attached image.
     private var inputBar: some View {
         VStack(spacing: 6) {
             if self.pendingImageData != nil {
                 self.pendingImagePreview
             }
-            HStack(spacing: 10) {
+            HStack(spacing: 6) {
                 if self.activeProviderSupportsVision {
-                    PhotosPicker(
-                        selection: self.$pickedImage,
-                        matching: .images,
-                        photoLibrary: .shared()
-                    ) {
-                        Image(systemName: "paperclip")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                    }
-                    .disabled(self.isStreaming)
+                    self.attachButton
                 }
                 TextField("Message", text: self.$input, axis: .vertical)
-                    .font(.body)
-                    .lineLimit(1...4)
+                    .font(.system(size: 16, weight: .medium, design: .rounded))
+                    .lineLimit(1 ... 4)
                     .disabled(self.isStreaming)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(
-                        Capsule()
-                            .fill(Color(.secondarySystemBackground))
-                    )
-                Button {
-                    Task { await self.send() }
-                } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.headline)
-                        .foregroundStyle(.white)
-                        .frame(width: 36, height: 36)
-                        .background(
-                            Circle().fill(
-                                self.canSend ? Color.accentColor : Color(.tertiarySystemFill)
-                            )
-                        )
-                }
-                .disabled(self.canSend == false)
+                    .padding(.horizontal, 8)
+                self.sendButton
             }
+            .padding(6)
+            .glassEffect(
+                .regular,
+                in: RoundedRectangle(cornerRadius: 28, style: .continuous)
+            )
         }
         .padding(.horizontal, 12)
         .padding(.top, 8)
         .padding(.bottom, 12)
-        .background(.bar)
         .onChange(of: self.pickedImage) { _, newValue in
             Task { await self.loadPickedImage(newValue) }
         }
+    }
+
+    private var attachButton: some View {
+        PhotosPicker(
+            selection: self.$pickedImage,
+            matching: .images,
+            photoLibrary: .shared()
+        ) {
+            Image(systemName: "paperclip")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 36, height: 36)
+                .background(Color(.tertiarySystemFill))
+                .clipShape(Circle())
+        }
+        .disabled(self.isStreaming)
+        .accessibilityLabel("Attach image")
+    }
+
+    private var sendButton: some View {
+        Button {
+            Task { await self.send() }
+        } label: {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(self.canSend ? Color.accentColor : .secondary)
+                .frame(width: 36, height: 36)
+                .background(
+                    Circle().fill(
+                        self.canSend
+                            ? Color.accentColor.opacity(0.18)
+                            : Color(.tertiarySystemFill)
+                    )
+                )
+        }
+        .buttonStyle(.plain)
+        .disabled(self.canSend == false)
+        .transition(.scale.combined(with: .opacity))
+        .animation(.spring(response: 0.25, dampingFraction: 0.85), value: self.canSend)
+        .accessibilityLabel("Send")
     }
 
     @ViewBuilder

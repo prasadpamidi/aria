@@ -48,6 +48,25 @@ struct MessageBubble: View {
             } else {
                 Color.clear.frame(width: Self.avatarSize, height: Self.avatarSize)
             }
+            self.assistantBubbleContent
+            Spacer(minLength: 40)
+        }
+    }
+
+    /// Body of the assistant bubble — typing dots when there's no
+    /// text yet (model is still generating the first token); the
+    /// streamed text once it starts arriving.
+    @ViewBuilder
+    private var assistantBubbleContent: some View {
+        if self.item.content.isEmpty {
+            TypingIndicator()
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(
+                    RoundedRectangle(cornerRadius: Self.bubbleRadius, style: .continuous)
+                        .fill(Color(.tertiarySystemBackground))
+                )
+        } else {
             Text(LocalizedStringKey(self.item.content))
                 .font(.body)
                 .foregroundStyle(.primary)
@@ -58,7 +77,6 @@ struct MessageBubble: View {
                     RoundedRectangle(cornerRadius: Self.bubbleRadius, style: .continuous)
                         .fill(Color(.tertiarySystemBackground))
                 )
-            Spacer(minLength: 40)
         }
     }
 
