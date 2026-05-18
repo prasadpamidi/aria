@@ -11,14 +11,22 @@ struct AriaSampleApp: App {
         let result = Self.loadStorage()
         self.storageResult = result
         // Bound chat-history disk growth across all threads — runs
-        // once per launch, idempotent. Pair with the agent-side
-        // `HistoryWindowMiddleware` / `HistorySummarizationMiddleware`
-        // (which bound the wire side) for the full memory story.
+        // once per launch, idempotent. Reads the user's currently-
+        // saved retention preferences from `AriaSettings` (which
+        // mirror to `UserDefaults`) so a tweak in the Settings tab
+        // takes effect on the next launch.
         if case let .success(storage) = result {
+            // Read from UserDefaults directly (rather than instantiating
+            // `AriaSettings`) — App.init runs before the SwiftUI
+            // environment is built, so an observable here would be
+            // wasted overhead.
+            let defaults = UserDefaults.standard
+            let maxAgeDays = defaults.object(forKey: "aria.sample.retention.ageDays") as? Int ?? 90
+            let maxThreads = defaults.object(forKey: "aria.sample.retention.maxThreads") as? Int ?? 20
             Task.detached(priority: .background) {
                 let policy = HistoryRetentionPolicy(
-                    maxThreadAgeDays: 90,
-                    maxThreadCount: 20
+                    maxThreadAgeDays: Double(maxAgeDays),
+                    maxThreadCount: maxThreads
                 )
                 _ = try? await policy.enforce(on: storage.chatHistory)
             }
@@ -55,9 +63,12 @@ struct AriaSampleApp: App {
     @ViewBuilder private var rootView: some View {
         switch self.storageResult {
         case let .success(storage):
-            ContentView(storage: storage)
+            RootTabView(storage: storage)
         case let .failure(error):
             VStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.largeTitle)
+                    .foregroundStyle(.tertiary)
                 Text("Aria storage failed to initialize")
                     .font(.headline)
                 Text(String(describing: error))
