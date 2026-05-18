@@ -64,6 +64,60 @@ def quality_paths_string
   QUALITY_PATHS.map { |p| "\"#{File.join(PROJECT_ROOT, p)}\"" }.join(" ")
 end
 
+# SwiftFormat helper. Called by both the `format` lane and the
+# `quality`/`ci_quality` aggregator lanes. Lives outside the lanes
+# because the lane is named `format`, which collides with Ruby's
+# built-in `Kernel#format`: calling `format(...)` from inside another
+# lane resolves to `Kernel.format` (printf), not the Fastlane lane,
+# and explodes with "no implicit conversion of Hash into String".
+# The helper sidesteps the collision entirely.
+def run_swiftformat(lint:, verbose: false)
+  config = File.join(PROJECT_ROOT, ".swiftformat")
+  extra = []
+  extra << "--lint" if lint
+  extra << "--verbose" if verbose
+
+  cmd = ["swiftformat", quality_paths_string, "--config", "\"#{config}\"", *extra].join(" ")
+
+  UI.message("Running SwiftFormat#{lint ? ' (lint)' : ''}...")
+
+  begin
+    sh(cmd)
+    UI.success("SwiftFormat passed")
+  rescue StandardError
+    if lint
+      UI.user_error!("SwiftFormat found formatting issues")
+    else
+      raise
+    end
+  end
+end
+
+# SwiftLint helper. Mirrors `run_swiftformat`; the `lint` lane and
+# aggregator lanes both delegate here. `lint` doesn't collide with
+# any Kernel method, but the symmetry keeps the file consistent and
+# means the aggregator lanes never call other lanes (no risk of the
+# Ruby 3.2 keyword-args / Hash interop weirdness Fastlane's lane
+# runner has).
+def run_swiftlint(fix:, strict: false)
+  config = File.join(PROJECT_ROOT, ".swiftlint.yml")
+  mode = fix ? "--fix" : "lint"
+  strict_flag = strict ? " --strict" : ""
+
+  UI.message("Running SwiftLint#{fix ? ' (fix)' : ''}...")
+
+  begin
+    sh("swiftlint #{mode} #{quality_paths_string} --config \"#{config}\"#{strict_flag}")
+    UI.success("SwiftLint passed")
+  rescue StandardError
+    if strict
+      UI.user_error!("SwiftLint failed in strict mode")
+    else
+      UI.important("SwiftLint reported violations")
+    end
+  end
+end
+
 # ---------------------------------------------------------------------------
 # Swift Package lanes
 # ---------------------------------------------------------------------------
@@ -150,22 +204,7 @@ platform :ios do
   desc "  fix:true     - Auto-correct violations where possible"
   desc "  strict:true  - Fail on warnings (default: false)"
   lane :lint do |options|
-    config = File.join(PROJECT_ROOT, ".swiftlint.yml")
-    mode = options[:fix] ? "--fix" : "lint"
-    strict_flag = options[:strict] ? " --strict" : ""
-
-    UI.message("Running SwiftLint#{options[:fix] ? ' (fix)' : ''}...")
-
-    begin
-      sh("swiftlint #{mode} #{quality_paths_string} --config \"#{config}\"#{strict_flag}")
-      UI.success("SwiftLint passed")
-    rescue StandardError
-      if options[:strict]
-        UI.user_error!("SwiftLint failed in strict mode")
-      else
-        UI.important("SwiftLint reported violations")
-      end
-    end
+    run_swiftlint(fix: options[:fix] || false, strict: options[:strict] || false)
   end
 
   desc "Run SwiftFormat across Aria sources"
@@ -173,44 +212,22 @@ platform :ios do
   desc "  lint:true     - Check only, do not modify files"
   desc "  verbose:true  - Show detailed output"
   lane :format do |options|
-    config = File.join(PROJECT_ROOT, ".swiftformat")
-    extra = []
-    extra << "--lint" if options[:lint]
-    extra << "--verbose" if options[:verbose]
-
-    cmd = ["swiftformat", quality_paths_string, "--config", "\"#{config}\"", *extra].join(" ")
-
-    UI.message("Running SwiftFormat#{options[:lint] ? ' (lint)' : ''}...")
-
-    begin
-      sh(cmd)
-      UI.success("SwiftFormat passed")
-    rescue StandardError
-      if options[:lint]
-        UI.user_error!("SwiftFormat found formatting issues")
-      else
-        raise
-      end
-    end
+    run_swiftformat(lint: options[:lint] || false, verbose: options[:verbose] || false)
   end
 
   desc "Run all code-quality checks (format --lint + lint)"
   desc "Options: fix:true to auto-fix both"
   lane :quality do |options|
-    # When invoking another lane from within a lane, pass the
-    # options as an *explicit* hash literal `{ ... }`. Ruby 3.2
-    # interprets `format(lint: true)` as keyword arguments, which
-    # Fastlane's lane runner can't unpack into the receiver's
-    # `do |options|` block — the call raises
-    # `no implicit conversion of Hash into String`. Wrapping in
-    # braces forces a positional `Hash` arg, which is what the
-    # receiver actually expects.
+    # Aggregator lanes call the helpers directly rather than
+    # invoking sibling lanes — see comment on `run_swiftformat`
+    # for the Kernel#format collision that made the lane-to-lane
+    # path unusable.
     if options[:fix]
-      format({ lint: false })
-      lint({ fix: true })
+      run_swiftformat(lint: false)
+      run_swiftlint(fix: true)
     else
-      format({ lint: true })
-      lint({ fix: false })
+      run_swiftformat(lint: true)
+      run_swiftlint(fix: false)
     end
 
     UI.success("All quality checks complete")
@@ -233,9 +250,10 @@ platform :ios do
 
   desc "CI: format check + lint"
   lane :ci_quality do
-    # Explicit hash braces — see comment in :quality for why.
-    format({ lint: true })
-    lint({ strict: false })
+    # Same helper-direct pattern as :quality. See `run_swiftformat`
+    # for why we don't go through the sibling lane.
+    run_swiftformat(lint: true)
+    run_swiftlint(fix: false, strict: false)
   end
 
   # -----------------------------------------------------------------------
