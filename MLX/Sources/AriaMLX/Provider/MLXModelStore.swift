@@ -18,7 +18,7 @@
         /// - Parameter evictOnLoad: when `true` (the default), loading
         ///   a new model id evicts every other cached container before
         ///   the load starts. On-device, MLX weights are big — Gemma 4
-        ///   e2b plus Qwen 2.5 VL resident at the same time is enough
+        ///   e2b plus Qwen 3.5 VL resident at the same time is enough
         ///   to get iOS to jetsam the app — so the single-slot policy
         ///   matches the "one active model per conversation" UX. Set
         ///   to `false` on hosts with plenty of RAM that want

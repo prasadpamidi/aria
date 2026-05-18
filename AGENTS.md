@@ -32,9 +32,9 @@ aria/
 ├── Tests/
 │   ├── AriaTests/              Run on Linux + Apple
 │   └── AriaAppleTests/         Run on Apple only
-├── Examples/
+├── Apps/
 │   ├── AriaCLI/                CLI demo (executable target)
-│   └── SampleApp/              SwiftUI starter (separate Xcode project)
+│   └── AvyraApp/               Avyra — the SwiftUI iOS app built on Aria
 ├── Package.swift
 ├── README.md
 ├── LICENSE
@@ -46,57 +46,65 @@ aria/
 
 ## Build and test commands
 
-### Swift Package (CLI)
+**Always use Fastlane.** Every build, test, and quality check has a
+lane. Both local development and CI run the same `bundle exec fastlane
+<lane>` commands — so anything that passes locally also passes in
+CI, and vice versa. Do not invoke `swift build`, `swift test`, or
+`xcodebuild` directly; use the lane instead.
 
 ```bash
-swift build                              # build all targets
-swift build --target Aria                # build only platform-agnostic core
-swift test                               # all tests
-swift test --filter AriaTests            # core tests (Linux-safe)
-swift run AriaCLI                        # CLI demo
-```
+# Package — Swift Package (core + AriaApple + AriaTesting + AriaTools)
+bundle exec fastlane package_build       # build all targets
+bundle exec fastlane package_tests       # run all tests
+bundle exec fastlane core_tests          # core tests only (Linux-safe)
+bundle exec fastlane cli_demo            # run the CLI demo
 
-### AriaSample (iOS app)
-
-```bash
-# Open in Xcode
-open Examples/SampleApp/AriaSample.xcodeproj
-
-# Build from CLI
-xcodebuild build \
-  -project Examples/SampleApp/AriaSample.xcodeproj \
-  -scheme AriaSample \
-  -destination 'platform=iOS Simulator,name=iPhone 17'
-```
-
-### Fastlane (preferred for routine work)
-
-```bash
-# Package
-bundle exec fastlane package_build       # swift build
-bundle exec fastlane package_tests       # swift test
-bundle exec fastlane core_tests          # swift test --filter AriaTests
-bundle exec fastlane cli_demo            # swift run AriaCLI
-
-# Sample app
-bundle exec fastlane sample_build        # build AriaSample on iOS Simulator
-bundle exec fastlane sample_tests        # run AriaSample tests on iOS Simulator
-bundle exec fastlane sample_build device:'iPhone 17 Pro' clean:true
+# App — Avyra (iOS, depends on Aria)
+bundle exec fastlane app_local_build                                  # build for iOS Simulator
+bundle exec fastlane app_local_build device:'iPhone 17 Pro' clean:true # named device, clean build
+bundle exec fastlane app_tests                                        # run Avyra tests on Simulator
 
 # Code quality
-bundle exec fastlane format              # SwiftFormat in place
-bundle exec fastlane format lint:true    # SwiftFormat check only
+bundle exec fastlane format              # SwiftFormat (in place)
+bundle exec fastlane format lint:true    # SwiftFormat check only (no writes)
 bundle exec fastlane lint                # SwiftLint
 bundle exec fastlane lint fix:true       # SwiftLint --fix
 bundle exec fastlane quality             # format --lint + lint
 bundle exec fastlane quality fix:true    # auto-fix both
 
-# CI shortcuts
-bundle exec fastlane ci_quality          # used by the GitHub Actions quality job
-bundle exec fastlane ci_build_test       # package_tests + sample_build
+# CI shortcuts (used by `.github/workflows/ci.yml`)
+bundle exec fastlane ci_quality          # quality lane, CI-friendly
+bundle exec fastlane ci_build_test       # package_tests + app_local_build + app_tests
 ```
 
-If `fastlane` is on your PATH (via rbenv or system gems), the `bundle exec` prefix is optional; `fastlane <lane>` works directly. CI uses `bundle exec` for reproducibility.
+If `fastlane` is on your PATH (via rbenv or system gems), the
+`bundle exec` prefix is optional; `fastlane <lane>` works directly.
+CI uses `bundle exec` for reproducibility — match that style in
+commit messages and PRs so commands paste cleanly into both
+contexts.
+
+### When to use raw `swift` / `xcodebuild`
+
+There are exactly two legitimate cases:
+
+1. **Editing the Fastfile itself** — testing whether a new lane wraps
+   the right underlying invocation.
+2. **A workflow Fastlane doesn't cover yet** — for example, building
+   the `MLX/` sub-package, which has its own `Package.swift` and no
+   lane wrapper. The CI workflow's macOS job does `cd MLX && swift
+   build && swift test` for this reason.
+
+Outside those, prefer the lane. If you find yourself wanting a raw
+invocation a second time, add a Fastlane lane.
+
+### Open the Xcode project
+
+```bash
+open Apps/AvyraApp/Avyra.xcodeproj
+```
+
+This is the one direct command outside the Fastlane path — Xcode is
+the editor, not a build runner.
 
 ### Local tooling setup (one-time)
 

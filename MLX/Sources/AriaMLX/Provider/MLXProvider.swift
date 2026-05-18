@@ -154,7 +154,7 @@
         /// `message.tool_call_id`. Bypasses `Chat.Message` (no
         /// `tool_calls` field) and `mlx-swift-lm`'s built-in
         /// `MessageGenerator`s (which drop tool_calls). Covers
-        /// Gemma 4 and Qwen 2.5 VL; both consume the same dict
+        /// Gemma 4 and Qwen 3.5 VL; both consume the same dict
         /// shape modulo the order of user-content parts.
         private static func openAIToolUserInput(
             from messages: [Aria.Message],
@@ -235,7 +235,7 @@
                 "type": "text",
                 "text": message.textContent
             ]
-            // Qwen 2.5 VL's `Qwen2VLMessageGenerator` emits text
+            // Qwen 3.5 VL's `Qwen2VLMessageGenerator` emits text
             // first then images; Gemma 4's chat template iterates
             // the content array in order and emits an `<|image|>`
             // marker on every image part — image-first matches the
@@ -328,24 +328,59 @@
             return result
         }
 
-        /// Forward `Gemma4ToolCallStreamParser.Event`s into the
-        /// provider's continuation, mirroring the dispatch the main
-        /// generation loop performs for `Generation` events.
+        /// Forward parser events into the provider's continuation,
+        /// mirroring the dispatch the main generation loop performs
+        /// for `Generation` events. Both `Gemma4ToolCallStreamParser`
+        /// and `Llama3ToolCallStreamParser` have the same event
+        /// shape (`textDelta(String) | toolCall(Aria.ToolCall)`), so
+        /// we pre-flatten them to a tuple here and avoid a second
+        /// copy of the loop body for each parser kind.
         private static func dispatch(
-            parserEvents: [Gemma4ToolCallStreamParser.Event],
+            parserEvents: [(String?, Aria.ToolCall?)],
             continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation,
             pendingToolCalls: inout [Aria.ToolCall]
         ) {
-            for event in parserEvents {
-                switch event {
-                case let .textDelta(text):
-                    if !text.isEmpty {
-                        continuation.yield(.textDelta(text))
-                    }
-                case let .toolCall(call):
+            for (text, call) in parserEvents {
+                if let text, !text.isEmpty {
+                    continuation.yield(.textDelta(text))
+                }
+                if let call {
                     pendingToolCalls.append(call)
                     continuation.yield(.toolCallStart(call))
                     continuation.yield(.toolCallEnd(id: call.id))
+                }
+            }
+        }
+
+        private static func flatten(
+            _ events: [Gemma4ToolCallStreamParser.Event]
+        ) -> [(String?, Aria.ToolCall?)] {
+            events.map { event in
+                switch event {
+                case let .textDelta(text): (text, nil)
+                case let .toolCall(call): (nil, call)
+                }
+            }
+        }
+
+        private static func flatten(
+            _ events: [Llama3ToolCallStreamParser.Event]
+        ) -> [(String?, Aria.ToolCall?)] {
+            events.map { event in
+                switch event {
+                case let .textDelta(text): (text, nil)
+                case let .toolCall(call): (nil, call)
+                }
+            }
+        }
+
+        private static func flatten(
+            _ events: [QwenToolCallStreamParser.Event]
+        ) -> [(String?, Aria.ToolCall?)] {
+            events.map { event in
+                switch event {
+                case let .textDelta(text): (text, nil)
+                case let .toolCall(call): (nil, call)
                 }
             }
         }
@@ -364,7 +399,7 @@
             defaultInstructions: String?,
             toolDefinitions: [ToolDefinition]
         ) throws -> UserInput {
-            // Some chat templates (Gemma 4, Qwen 2.5 VL) only render
+            // Some chat templates (Gemma 4, Qwen 3.5 VL) only render
             // prior tool round-trips when the assistant message
             // carries `tool_calls` and the tool message carries
             // `tool_call_id` (OpenAI Chat Completions shape).
@@ -458,10 +493,12 @@
         }
 
         /// Pump events from `mlx-swift-lm`'s `Generation` stream into
-        /// the provider's continuation. Gemma 4's tool-call format
-        /// isn't recognised by any built-in parser, so for that
-        /// family we tee `.chunk` text through
-        /// `Gemma4ToolCallStreamParser` to recover tool calls.
+        /// the provider's continuation. Some model families emit
+        /// tool calls in formats `mlx-swift-lm`'s built-in
+        /// `ToolCallProcessor` doesn't fully cover — for those we
+        /// tee `.chunk` text through a family-specific stream
+        /// parser to recover the calls before they leak as visible
+        /// text. Currently covered: Gemma 4, Llama 3.x.
         private func consume(
             generation: AsyncStream<Generation>,
             continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation
@@ -474,12 +511,22 @@
                 self.modelCapabilities.usesGemma4ToolFormat
                     ? Gemma4ToolCallStreamParser()
                     : nil
+            var llama3Parser: Llama3ToolCallStreamParser? =
+                self.modelCapabilities.usesLlama3ToolFormat
+                    ? Llama3ToolCallStreamParser()
+                    : nil
+            var qwenParser: QwenToolCallStreamParser? =
+                self.modelCapabilities.usesQwenToolFormat
+                    ? QwenToolCallStreamParser()
+                    : nil
 
             for await event in generation {
                 try Task.checkCancellation()
                 self.handle(
                     event: event,
                     gemma4Parser: &gemma4Parser,
+                    llama3Parser: &llama3Parser,
+                    qwenParser: &qwenParser,
                     pendingToolCalls: &pendingToolCalls,
                     continuation: continuation
                 )
@@ -487,7 +534,21 @@
 
             if var parser = gemma4Parser {
                 Self.dispatch(
-                    parserEvents: parser.flush(),
+                    parserEvents: Self.flatten(parser.flush()),
+                    continuation: continuation,
+                    pendingToolCalls: &pendingToolCalls
+                )
+            }
+            if var parser = llama3Parser {
+                Self.dispatch(
+                    parserEvents: Self.flatten(parser.flush()),
+                    continuation: continuation,
+                    pendingToolCalls: &pendingToolCalls
+                )
+            }
+            if var parser = qwenParser {
+                Self.dispatch(
+                    parserEvents: Self.flatten(parser.flush()),
                     continuation: continuation,
                     pendingToolCalls: &pendingToolCalls
                 )
@@ -501,16 +562,37 @@
         private func handle(
             event: Generation,
             gemma4Parser: inout Gemma4ToolCallStreamParser?,
+            llama3Parser: inout Llama3ToolCallStreamParser?,
+            qwenParser: inout QwenToolCallStreamParser?,
             pendingToolCalls: inout [Aria.ToolCall],
             continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation
         ) {
             switch event {
             case let .chunk(text):
+                // Family-specific parsers are mutually exclusive
+                // (a model belongs to one family). Check in order;
+                // fall through to a raw textDelta when none matches.
                 if var parser = gemma4Parser {
                     let parserEvents = parser.process(text)
                     gemma4Parser = parser
                     Self.dispatch(
-                        parserEvents: parserEvents,
+                        parserEvents: Self.flatten(parserEvents),
+                        continuation: continuation,
+                        pendingToolCalls: &pendingToolCalls
+                    )
+                } else if var parser = llama3Parser {
+                    let parserEvents = parser.process(text)
+                    llama3Parser = parser
+                    Self.dispatch(
+                        parserEvents: Self.flatten(parserEvents),
+                        continuation: continuation,
+                        pendingToolCalls: &pendingToolCalls
+                    )
+                } else if var parser = qwenParser {
+                    let parserEvents = parser.process(text)
+                    qwenParser = parser
+                    Self.dispatch(
+                        parserEvents: Self.flatten(parserEvents),
                         continuation: continuation,
                         pendingToolCalls: &pendingToolCalls
                     )

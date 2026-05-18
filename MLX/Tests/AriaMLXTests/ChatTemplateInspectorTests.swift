@@ -4,7 +4,7 @@
 
     final class ChatTemplateInspectorTests: XCTestCase {
         func testDetectsQwenStyleToolTemplate() {
-            // Trimmed Qwen 2.5 chat template — references `tools`,
+            // Trimmed Qwen-family chat template — references `tools`,
             // `tool_calls`, and the `<tool_call>` literal.
             let template = """
             {% if tools %}

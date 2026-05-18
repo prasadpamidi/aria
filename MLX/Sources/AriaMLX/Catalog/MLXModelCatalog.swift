@@ -15,12 +15,12 @@
         /// Default models the sample app shows in its model picker.
         /// Ordered roughly by RAM footprint.
         public static let defaults: [MLXModelCapabilities] = [
-            .qwen25Instruct4bit,
             .gemma2Instruct4bit,
             .llama32Instruct4bit,
-            .qwen25VL3BInstruct4bit,
+            .qwen35MLX4B4bit,
             .gemma4E2BInstruct4bit,
             .gemma4E4BInstruct4bit,
+            .qwen35MLX9B4bit,
         ]
 
         /// Look up a curated entry by Hugging Face id.
@@ -32,20 +32,41 @@
     // MARK: - Curated entries
 
     extension MLXModelCapabilities {
-        /// Qwen 2.5 1.5B Instruct, 4-bit quantization. Smallest tool-
-        /// capable entry in the catalog. Fits comfortably on iPhones with
-        /// ≥4 GB RAM (iPhone 13 and newer).
-        public static let qwen25Instruct4bit = MLXModelCapabilities(
-            id: "mlx-community/Qwen2.5-1.5B-Instruct-4bit",
-            displayName: "Qwen 2.5 1.5B Instruct (4-bit)",
-            family: "qwen2.5",
-            approximateDiskBytes: 950_000_000, // ~900 MiB on disk
-            contextWindow: 32768,
+        /// Qwen 3.5 4B (vision + text), 4-bit quantization. Smallest
+        /// vision-capable Qwen 3.5 variant. ~2.4 GB on disk; needs
+        /// ~6 GB RAM (iPhone 15+). Uses mlx-vlm under the hood, so
+        /// images flow through the same Hermes-style tool-calling
+        /// template as the text-only Qwen line.
+        public static let qwen35MLX4B4bit = MLXModelCapabilities(
+            id: "mlx-community/Qwen3.5-4B-MLX-4bit",
+            displayName: "Qwen 3.5 4B (4-bit)",
+            family: "qwen3.5-vl",
+            kind: .vision,
+            approximateDiskBytes: 2_400_000_000, // ~2.4 GiB on disk
+            contextWindow: 131_072,
             supportsTools: true,
-            recommendedRAMGigabytes: 4,
-            // model_type "qwen2" isn't covered by ToolCallFormat.infer;
-            // chat template emits Hermes-style <tool_call>{json}</tool_call>.
-            toolCallFormat: .json
+            supportsVision: true,
+            recommendedRAMGigabytes: 6
+            // `toolCallFormat: nil` — `mlx-swift-lm`'s `.json`
+            // parser misses Qwen 3.5 edge cases. `MLXProvider`
+            // routes raw `.chunk` text through
+            // `QwenToolCallStreamParser` instead.
+        )
+
+        /// Qwen 3.5 9B (vision + text), 4-bit quantization.
+        /// Higher-quality replies than the 4B; needs ~12 GB RAM
+        /// (iPhone 17 Pro / M-series only). ~5 GB on disk.
+        public static let qwen35MLX9B4bit = MLXModelCapabilities(
+            id: "mlx-community/Qwen3.5-9B-MLX-4bit",
+            displayName: "Qwen 3.5 9B (4-bit)",
+            family: "qwen3.5-vl",
+            kind: .vision,
+            approximateDiskBytes: 5_000_000_000, // ~5.0 GiB on disk
+            contextWindow: 131_072,
+            supportsTools: true,
+            supportsVision: true,
+            recommendedRAMGigabytes: 12
+            // See qwen35MLX4B4bit — we own Qwen tool parsing.
         )
 
         /// Llama 3.2 3B Instruct, 4-bit quantization. Higher-quality
@@ -75,26 +96,6 @@
             // <start_function_call>call:NAME{...}<end_function_call>
             // form that GemmaFunctionParser handles.
             toolCallFormat: .gemma
-        )
-
-        /// Qwen 2.5 VL 3B Instruct, 4-bit quantization. Vision +
-        /// language model — accepts image inputs alongside text.
-        /// Pre-registered in `MLXVLM.VLMRegistry`. Qwen 2.5 VL ships
-        /// with the same Hermes-style tool-calling chat template as
-        /// the text-only Qwen 2.5 line, so `remember_fact` and other
-        /// agent tools work alongside images.
-        public static let qwen25VL3BInstruct4bit = MLXModelCapabilities(
-            id: "mlx-community/Qwen2.5-VL-3B-Instruct-4bit",
-            displayName: "Qwen 2.5 VL 3B Instruct (4-bit)",
-            family: "qwen2.5-vl",
-            kind: .vision,
-            approximateDiskBytes: 2_400_000_000, // ~2.2 GiB
-            contextWindow: 32768,
-            supportsTools: true,
-            supportsVision: true,
-            recommendedRAMGigabytes: 6,
-            // Same Hermes-style template as text Qwen 2.5.
-            toolCallFormat: .json
         )
 
         /// Google Gemma 4 e2b Instruct, 4-bit quantization. Smallest

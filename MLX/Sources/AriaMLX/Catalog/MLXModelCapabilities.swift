@@ -50,14 +50,14 @@
 
         // MARK: Public
 
-        /// Hugging Face hub id, e.g. `"mlx-community/Qwen2.5-1.5B-Instruct-4bit"`.
+        /// Hugging Face hub id, e.g. `"mlx-community/Qwen3.5-4B-MLX-4bit"`.
         public let id: String
 
         /// User-facing label.
         public let displayName: String
 
         /// Model family for capability inference fallbacks
-        /// (e.g. "qwen2.5", "llama-3.2", "gemma-2").
+        /// (e.g. "qwen3.5-vl", "llama-3.2", "gemma-2").
         public let family: String
 
         /// Whether the model expects image inputs alongside text.
@@ -91,8 +91,8 @@
 
         /// Override `mlx-swift-lm`'s tool-call format inference. The
         /// library only auto-detects a handful of `model_type`
-        /// strings — Qwen 2.5 (`qwen2`), Qwen 2.5 VL
-        /// (`qwen2_5_vl`), Gemma 2 (`gemma2`), and Gemma 4 (`gemma4`)
+        /// strings — Qwen 3.5 VL (`qwen3`), Gemma 2 (`gemma2`),
+        /// and Gemma 4 (`gemma4`)
         /// all return `nil` from `ToolCallFormat.infer`. Without an
         /// override, tool-call output gets emitted as plain text and
         /// the agent never executes anything. Set this to the format
@@ -113,6 +113,31 @@
             self.family == "gemma-4"
         }
 
+        /// `true` for the Llama 3.x family (3, 3.1, 3.2, …). Their
+        /// chat template wraps tool calls in
+        /// `<|python_tag|>{...}<|eom_id|>`, which `mlx-swift-lm`'s
+        /// built-in `ToolCallProcessor` doesn't fully parse — the
+        /// raw control tokens leak as visible text.
+        /// `MLXProvider` routes raw `.chunk` text through
+        /// `Llama3ToolCallStreamParser` for this family.
+        public var usesLlama3ToolFormat: Bool {
+            self.family.hasPrefix("llama-3")
+        }
+
+        /// `true` for the Qwen family (2.5 / 3.x / 3.5, both text
+        /// and VL variants). Tool calls are wrapped in Hermes-style
+        /// `<tool_call>{json}</tool_call>` envelopes.
+        /// `mlx-swift-lm`'s `.json` `ToolCallProcessor` targets the
+        /// same shape but has edge cases the Qwen 3.5 jinja
+        /// template trips (whitespace, escaped braces, mixed
+        /// XML/JSON drift in long contexts). Owning the parsing
+        /// ourselves via `QwenToolCallStreamParser` is more
+        /// reliable; catalog entries set `toolCallFormat: nil` so
+        /// `mlx-swift-lm` doesn't try to parse in parallel.
+        public var usesQwenToolFormat: Bool {
+            self.family.hasPrefix("qwen")
+        }
+
         /// `true` when the model's chat template requires the
         /// OpenAI Chat Completions message shape
         /// (`assistant.tool_calls` + `role:tool` with
@@ -120,9 +145,21 @@
         /// `mlx-swift-lm`'s built-in `MessageGenerator`s drop
         /// `tool_calls` on the floor, so `MLXProvider` has to bypass
         /// them and emit raw `[MLXLMCommon.Message]` dicts for these
-        /// families. Currently true for Gemma 4 and Qwen 2.5 VL.
+        /// families.
+        ///
+        /// Why Llama 3 needs this too: even though Llama 3 emits
+        /// tool calls via `<|python_tag|>` (captured by
+        /// `Llama3ToolCallStreamParser`), the *next* agent loop
+        /// needs to feed the tool result back. Without the OpenAI
+        /// shape, the assistant message that triggered the tool
+        /// loses its `tool_calls` field, and the tool result loses
+        /// its `tool_call_id` — so Llama never realizes the tool
+        /// was called or what it returned, and can't produce a
+        /// follow-up reply that reads the result.
         public var requiresOpenAIToolShape: Bool {
-            self.usesGemma4ToolFormat || self.family == "qwen2.5-vl"
+            self.usesGemma4ToolFormat
+                || self.usesLlama3ToolFormat
+                || self.family == "qwen3.5-vl"
         }
     }
 #endif

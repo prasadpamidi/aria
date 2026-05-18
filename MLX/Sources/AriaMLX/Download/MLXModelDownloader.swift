@@ -96,9 +96,9 @@
                 ? VLMModelFactory.shared
                 : LLMModelFactory.shared
             // Override mlx-swift-lm's `ToolCallFormat.infer` when the
-            // catalog knows the model's chat-template format (Qwen 2.5,
-            // Qwen 2.5 VL, Gemma 2, etc. report `model_type` strings
-            // the inferrer doesn't cover).
+            // catalog knows the model's chat-template format (Qwen 3.5
+            // VL, Gemma 2, etc. report `model_type` strings the
+            // inferrer doesn't cover).
             let configuration = ModelConfiguration(
                 id: id,
                 revision: revision,

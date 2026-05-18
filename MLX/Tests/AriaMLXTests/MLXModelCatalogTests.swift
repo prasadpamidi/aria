@@ -11,10 +11,11 @@
         }
 
         func testEntryLookupReturnsCuratedCapabilities() {
-            let entry = MLXModelCatalog.entry(for: "mlx-community/Qwen2.5-1.5B-Instruct-4bit")
+            let entry = MLXModelCatalog.entry(for: "mlx-community/Qwen3.5-4B-MLX-4bit")
             XCTAssertNotNil(entry)
-            XCTAssertEqual(entry?.family, "qwen2.5")
+            XCTAssertEqual(entry?.family, "qwen3.5-vl")
             XCTAssertTrue(entry?.supportsTools ?? false)
+            XCTAssertTrue(entry?.supportsVision ?? false)
         }
 
         func testEntryLookupReturnsNilForUnknownId() {
@@ -22,7 +23,7 @@
         }
 
         func testCapabilitiesAreCodable() throws {
-            let original = MLXModelCapabilities.qwen25Instruct4bit
+            let original = MLXModelCapabilities.qwen35MLX4B4bit
             let data = try JSONEncoder().encode(original)
             let decoded = try JSONDecoder().decode(MLXModelCapabilities.self, from: data)
             XCTAssertEqual(decoded, original)

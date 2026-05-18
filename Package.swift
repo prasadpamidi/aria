@@ -95,12 +95,12 @@ let package = Package(
             path: "Tests/AriaAppleTests"
         ),
 
-        // MARK: - Examples
+        // MARK: - Apps
 
         .executableTarget(
             name: "AriaCLI",
             dependencies: ["Aria", "AriaTesting"],
-            path: "Examples/AriaCLI"
+            path: "Apps/AriaCLI"
         ),
     ]
 )

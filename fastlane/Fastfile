@@ -1,22 +1,22 @@
 # frozen_string_literal: true
 
 # Fastfile for Aria
-# Lanes for building, testing, and quality-checking the Swift package and the
-# AriaSample iOS demo app.
+# Lanes for building, testing, and quality-checking the Aria Swift package
+# and the Avyra iOS app (the sample app that ships on top of the package).
 #
 # Usage examples:
 #   bundle exec fastlane package_build      # swift build
 #   bundle exec fastlane package_tests      # swift test (all targets)
 #   bundle exec fastlane core_tests         # swift test --filter AriaTests (Linux-safe)
-#   bundle exec fastlane sample_build       # build AriaSample on iOS Simulator
-#   bundle exec fastlane sample_tests       # run AriaSample tests on iOS Simulator
+#   bundle exec fastlane app_local_build       # build Avyra on iOS Simulator
+#   bundle exec fastlane app_tests       # run Avyra tests on iOS Simulator
 #   bundle exec fastlane lint               # SwiftLint
 #   bundle exec fastlane lint fix:true      # SwiftLint --fix
 #   bundle exec fastlane format             # SwiftFormat (in place)
 #   bundle exec fastlane format lint:true   # SwiftFormat --lint (no writes)
 #   bundle exec fastlane quality            # format --lint + lint
 #   bundle exec fastlane ci_quality         # quality, CI-friendly
-#   bundle exec fastlane ci_build_test      # package_tests + sample_build
+#   bundle exec fastlane ci_build_test      # package_tests + app_local_build + app_tests
 #   bundle exec fastlane clean              # clear build artifacts
 
 default_platform(:ios)
@@ -26,18 +26,18 @@ default_platform(:ios)
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = File.expand_path("..", __dir__)
-SAMPLE_PROJECT = File.join(PROJECT_ROOT, "Examples/SampleApp/AriaSample.xcodeproj")
-SAMPLE_SCHEME = "AriaSample"
+APP_PROJECT = File.join(PROJECT_ROOT, "Apps/AvyraApp/Avyra.xcodeproj")
+APP_SCHEME = "Avyra"
 DEFAULT_SIMULATOR = "iPhone 17"
 
-# Paths SwiftFormat / SwiftLint should cover (relative to repo root)
+# Paths SwiftFormat / SwiftLint should cover (relative to repo root).
 QUALITY_PATHS = [
   "Sources",
   "Tests",
-  "Examples/AriaCLI",
-  "Examples/SampleApp/AriaSample",
-  "Examples/SampleApp/AriaSampleTests",
-  "Examples/SampleApp/AriaSampleUITests"
+  "Apps/AriaCLI",
+  "Apps/AvyraApp/Avyra",
+  "Apps/AvyraApp/AvyraTests",
+  "Apps/AvyraApp/AvyraUITests"
 ].freeze
 
 # ---------------------------------------------------------------------------
@@ -91,21 +91,21 @@ platform :ios do
   end
 
   # -----------------------------------------------------------------------
-  # AriaSample (Xcode) lanes
+  # Avyra (Xcode) lanes
   # -----------------------------------------------------------------------
 
-  desc "Build AriaSample for iOS Simulator"
+  desc "Build Avyra for iOS Simulator"
   desc "Options:"
   desc "  device:'iPhone 17'   - Simulator by name"
   desc "  id:'<uuid>'          - Simulator by UDID"
   desc "  clean:true           - Clean before building"
-  lane :sample_build do |options|
+  lane :app_local_build do |options|
     destination = simulator_destination(options)
-    UI.message("Building AriaSample for: #{destination}")
+    UI.message("Building Avyra for: #{destination}")
 
     xcodebuild(
-      project: SAMPLE_PROJECT,
-      scheme: SAMPLE_SCHEME,
+      project: APP_PROJECT,
+      scheme: APP_SCHEME,
       configuration: "Debug",
       destination: destination,
       build: true,
@@ -113,24 +113,24 @@ platform :ios do
       xcargs: "CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO"
     )
 
-    UI.success("AriaSample build complete")
+    UI.success("Avyra build complete")
   end
 
-  desc "Run AriaSample tests on iOS Simulator"
-  desc "Options: device, id, clean — same as sample_build"
-  lane :sample_tests do |options|
+  desc "Run Avyra tests on iOS Simulator"
+  desc "Options: device, id, clean — same as app_local_build"
+  lane :app_tests do |options|
     destination = simulator_destination(options)
-    UI.message("Testing AriaSample on: #{destination}")
+    UI.message("Testing Avyra on: #{destination}")
 
     run_tests(
-      project: SAMPLE_PROJECT,
-      scheme: SAMPLE_SCHEME,
+      project: APP_PROJECT,
+      scheme: APP_SCHEME,
       destination: destination,
       clean: options[:clean] || false,
       code_coverage: true
     )
 
-    UI.success("AriaSample tests passed")
+    UI.success("Avyra tests passed")
   end
 
   # -----------------------------------------------------------------------
@@ -189,12 +189,15 @@ platform :ios do
   desc "Run all code-quality checks (format --lint + lint)"
   desc "Options: fix:true to auto-fix both"
   lane :quality do |options|
+    # Fastlane requires explicit keyword args when invoking another
+    # lane from within a lane — `format` and `lint` declare
+    # `do |options|`, so they need a hash even when defaults are fine.
     if options[:fix]
-      format
+      format(lint: false)
       lint(fix: true)
     else
       format(lint: true)
-      lint
+      lint(fix: false)
     end
 
     UI.success("All quality checks complete")
@@ -204,10 +207,11 @@ platform :ios do
   # CI lanes
   # -----------------------------------------------------------------------
 
-  desc "CI: build and test everything (package + sample)"
+  desc "CI: build and test everything (package + app)"
   lane :ci_build_test do
     package_tests
-    sample_build
+    app_local_build
+    app_tests
   end
 
   desc "CI: format check + lint"
@@ -222,7 +226,7 @@ platform :ios do
 
   desc "Clear build artifacts"
   lane :clean do
-    in_root("rm -rf .build .swiftpm/.build Examples/SampleApp/build")
+    in_root("rm -rf .build .swiftpm/.build Apps/AvyraApp/build")
     clear_derived_data
     UI.success("Build artifacts cleaned")
   end
