@@ -48,11 +48,13 @@ def in_root(command)
   sh("cd '#{PROJECT_ROOT}' && #{command}")
 end
 
-def simulator_destination(options)
+def simulator_destination(options, prefer_generic: false)
   if options[:id]
     "platform=iOS Simulator,id=#{options[:id]}"
   elsif options[:device]
     "platform=iOS Simulator,name=#{options[:device]}"
+  elsif prefer_generic
+    "generic/platform=iOS Simulator"
   else
     "platform=iOS Simulator,name=#{DEFAULT_SIMULATOR}"
   end
@@ -99,8 +101,14 @@ platform :ios do
   desc "  device:'iPhone 17'   - Simulator by name"
   desc "  id:'<uuid>'          - Simulator by UDID"
   desc "  clean:true           - Clean before building"
+  desc ""
+  desc "With no device/id, builds against the generic iOS Simulator"
+  desc "destination — works on any Mac (including CI runners) without"
+  desc "requiring a specific simulator to be installed. Tests need a"
+  desc "real named simulator; pass device:'iPhone 17 Pro' or id:'<uuid>'"
+  desc "to target one for local debug runs."
   lane :app_local_build do |options|
-    destination = simulator_destination(options)
+    destination = simulator_destination(options, prefer_generic: true)
     UI.message("Building Avyra for: #{destination}")
 
     xcodebuild(
@@ -189,15 +197,20 @@ platform :ios do
   desc "Run all code-quality checks (format --lint + lint)"
   desc "Options: fix:true to auto-fix both"
   lane :quality do |options|
-    # Fastlane requires explicit keyword args when invoking another
-    # lane from within a lane — `format` and `lint` declare
-    # `do |options|`, so they need a hash even when defaults are fine.
+    # When invoking another lane from within a lane, pass the
+    # options as an *explicit* hash literal `{ ... }`. Ruby 3.2
+    # interprets `format(lint: true)` as keyword arguments, which
+    # Fastlane's lane runner can't unpack into the receiver's
+    # `do |options|` block — the call raises
+    # `no implicit conversion of Hash into String`. Wrapping in
+    # braces forces a positional `Hash` arg, which is what the
+    # receiver actually expects.
     if options[:fix]
-      format(lint: false)
-      lint(fix: true)
+      format({ lint: false })
+      lint({ fix: true })
     else
-      format(lint: true)
-      lint(fix: false)
+      format({ lint: true })
+      lint({ fix: false })
     end
 
     UI.success("All quality checks complete")
@@ -209,15 +222,20 @@ platform :ios do
 
   desc "CI: build and test everything (package + app)"
   lane :ci_build_test do
+    # Receiver lanes that declare `do |options|` need an explicit
+    # hash so Ruby 3.2+ doesn't refuse the call. Lanes without an
+    # options block (like `package_tests`) accept the empty hash
+    # silently, so passing `{}` everywhere is uniform and safe.
     package_tests
-    app_local_build
-    app_tests
+    app_local_build({})
+    app_tests({})
   end
 
   desc "CI: format check + lint"
   lane :ci_quality do
-    format(lint: true)
-    lint(strict: false)
+    # Explicit hash braces — see comment in :quality for why.
+    format({ lint: true })
+    lint({ strict: false })
   end
 
   # -----------------------------------------------------------------------
