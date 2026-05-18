@@ -38,27 +38,24 @@ struct ChatScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            self.providerStrip
+            ChatHeader(
+                providerLabel: self.providerLabel,
+                memoryEnabled: self.settings.memoryEnabled,
+                onPickModel: { self.modelPickerShown = true },
+                onClearChat: { Task { await self.clearHistory() } },
+                isStreaming: self.isStreaming,
+                canClearChat: !self.transcript.isEmpty
+            )
             self.messageList
             self.inputBar
         }
         .background(Color(.systemBackground))
-        .navigationTitle("Chat")
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button(role: .destructive) {
-                        Task { await self.clearHistory() }
-                    } label: {
-                        Label("Clear chat", systemImage: "trash")
-                    }
-                    .disabled(self.transcript.isEmpty)
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .disabled(self.isStreaming)
+        .toolbar(.hidden, for: .navigationBar)
+        .sheet(isPresented: self.$modelPickerShown) {
+            ModelPickerSheet(appState: self.appState) {
+                self.modelPickerShown = false
             }
+            .presentationDetents([.medium, .large])
         }
         .task { await self.loadHistory() }
     }
@@ -71,6 +68,7 @@ struct ChatScreen: View {
     @State private var memoryProbe = MemoryProbe()
     @State private var pickedImage: PhotosPickerItem?
     @State private var pendingImageData: Data?
+    @State private var modelPickerShown = false
 
     @Environment(\.ariaSettings) private var settings
 
@@ -79,31 +77,6 @@ struct ChatScreen: View {
     private let sessionRecorder: SessionRecorder
 
     // MARK: - Subviews
-
-    /// Slim banner under the nav bar showing the active provider so
-    /// the user knows whether they're hitting on-device FM, an MLX
-    /// model, or whatever else is wired.
-    private var providerStrip: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "cpu")
-                .font(.caption)
-            Text(self.providerLabel)
-                .font(.caption)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer()
-            if !self.settings.memoryEnabled {
-                Label("memory off", systemImage: "brain.head.profile")
-                    .labelStyle(.titleAndIcon)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .foregroundStyle(.secondary)
-        .padding(.horizontal)
-        .padding(.vertical, 6)
-        .background(Color(.secondarySystemBackground))
-    }
 
     private var providerLabel: String {
         #if canImport(AriaMLX)
@@ -117,16 +90,22 @@ struct ChatScreen: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                LazyVStack(alignment: .leading, spacing: 8) {
                     if self.transcript.isEmpty {
                         self.emptyState
                     } else {
-                        ForEach(self.transcript) { item in
-                            TranscriptItemView(item: item).id(item.id)
+                        ForEach(Array(self.transcript.enumerated()), id: \.element.id) { index, item in
+                            MessageBubble(
+                                item: item,
+                                isFirstInGroup: self.isFirstInGroup(at: index)
+                            )
+                            .id(item.id)
                         }
                     }
                 }
-                .padding()
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .padding(.bottom, 12)
             }
             .onChange(of: self.transcript.count) { _, _ in
                 if let last = transcript.last {
@@ -134,6 +113,14 @@ struct ChatScreen: View {
                 }
             }
         }
+    }
+
+    /// Group-aware avatar gating — only the FIRST bubble in a run of
+    /// same-role messages shows the avatar. Subsequent bubbles
+    /// render a transparent spacer so text alignment is consistent.
+    private func isFirstInGroup(at index: Int) -> Bool {
+        guard index > 0 else { return true }
+        return self.transcript[index].role != self.transcript[index - 1].role
     }
 
     private var emptyState: some View {
@@ -159,7 +146,7 @@ struct ChatScreen: View {
             if self.pendingImageData != nil {
                 self.pendingImagePreview
             }
-            HStack(spacing: 8) {
+            HStack(spacing: 10) {
                 if self.activeProviderSupportsVision {
                     PhotosPicker(
                         selection: self.$pickedImage,
@@ -168,24 +155,40 @@ struct ChatScreen: View {
                     ) {
                         Image(systemName: "paperclip")
                             .font(.title3)
+                            .foregroundStyle(.secondary)
                     }
                     .disabled(self.isStreaming)
                 }
                 TextField("Message", text: self.$input, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
+                    .font(.body)
                     .lineLimit(1...4)
                     .disabled(self.isStreaming)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(
+                        Capsule()
+                            .fill(Color(.secondarySystemBackground))
+                    )
                 Button {
                     Task { await self.send() }
                 } label: {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(.title2)
+                    Image(systemName: "arrow.up")
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                        .frame(width: 36, height: 36)
+                        .background(
+                            Circle().fill(
+                                self.canSend ? Color.accentColor : Color(.tertiarySystemFill)
+                            )
+                        )
                 }
                 .disabled(self.canSend == false)
             }
         }
-        .padding()
-        .background(Color(.secondarySystemBackground))
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
+        .background(.bar)
         .onChange(of: self.pickedImage) { _, newValue in
             Task { await self.loadPickedImage(newValue) }
         }
@@ -586,34 +589,5 @@ struct TranscriptItem: Identifiable {
     }
 }
 
-// MARK: - TranscriptItemView
-
-struct TranscriptItemView: View {
-    let item: TranscriptItem
-
-    var body: some View {
-        HStack(alignment: .top) {
-            if self.item.role == .assistant {
-                self.bubble
-                Spacer(minLength: 40)
-            } else {
-                Spacer(minLength: 40)
-                self.bubble
-            }
-        }
-    }
-
-    private var bubble: some View {
-        Text(self.item.content)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(
-                        self.item.role == .user
-                            ? Color.accentColor.opacity(0.15)
-                            : Color(.tertiarySystemBackground)
-                    )
-            )
-    }
-}
+// TranscriptItemView removed — replaced by `MessageBubble` which renders
+// the assistant avatar + uses the Niora-style bubble layout.

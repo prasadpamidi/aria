@@ -1,3 +1,4 @@
+import Aria
 import AriaApple
 import SwiftUI
 
@@ -29,48 +30,46 @@ struct RootTabView: View {
 
     var body: some View {
         TabView {
-            NavigationStack {
-                ChatScreen(
-                    storage: self.storage,
-                    appState: self.appState,
-                    sessionRecorder: self.sessionRecorder
-                )
+            Tab("Chat", systemImage: "bubble.left.and.bubble.right") {
+                NavigationStack {
+                    ChatScreen(
+                        storage: self.storage,
+                        appState: self.appState,
+                        sessionRecorder: self.sessionRecorder
+                    )
+                }
             }
-            .tabItem {
-                Label("Chat", systemImage: "bubble.left.and.bubble.right")
+            Tab("Demos", systemImage: "sparkles") {
+                NavigationStack {
+                    DemosScreen(
+                        storage: self.storage,
+                        sessionRecorder: self.sessionRecorder
+                    )
+                }
             }
-
-            NavigationStack {
-                DemosScreen(
-                    storage: self.storage,
-                    sessionRecorder: self.sessionRecorder
-                )
+            Tab("Memories", systemImage: "brain.head.profile") {
+                NavigationStack {
+                    MemoriesScreen(
+                        storage: self.storage,
+                        namespace: AriaSampleConstants.memoryNamespace
+                    )
+                }
             }
-            .tabItem {
-                Label("Demos", systemImage: "sparkles")
-            }
-
-            NavigationStack {
-                MemoriesScreen(
-                    storage: self.storage,
-                    namespace: AriaSampleConstants.memoryNamespace
-                )
-            }
-            .tabItem {
-                Label("Memories", systemImage: "brain.head.profile")
-            }
-
-            NavigationStack {
-                SettingsScreen(
-                    storage: self.storage,
-                    appState: self.appState,
-                    sessionRecorder: self.sessionRecorder
-                )
-            }
-            .tabItem {
-                Label("Settings", systemImage: "gearshape")
+            Tab("Settings", systemImage: "gearshape") {
+                NavigationStack {
+                    SettingsScreen(
+                        storage: self.storage,
+                        appState: self.appState,
+                        sessionRecorder: self.sessionRecorder
+                    )
+                }
             }
         }
+        // iOS 26 Liquid Glass tab bar — minimizes to a translucent pill
+        // on scroll-down so the chat surface gets the full vertical
+        // space while reading, and snaps back on scroll-up. Matches
+        // the polished tab-bar behavior new Apple apps adopted.
+        .tabBarMinimizeBehavior(.onScrollDown)
         .environment(self.settings)
     }
 
