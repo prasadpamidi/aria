@@ -202,8 +202,8 @@ swift test                                 # run all tests
 swift test --filter AriaTests              # core tests (Linux-safe)
 swift run AriaCLI                          # run the CLI demo
 
-# iOS sample app
-open Examples/SampleApp/AriaSample.xcodeproj
+# Avyra (the iOS app built on Aria)
+open Apps/AvyraApp/Avyra.xcodeproj
 ```
 
 ### Local setup (one-time)
@@ -220,7 +220,7 @@ Routine work goes through Fastlane lanes:
 
 ```bash
 bundle exec fastlane package_tests       # swift test
-bundle exec fastlane sample_build        # build AriaSample on iOS Simulator
+bundle exec fastlane sample_build        # build Avyra on iOS Simulator
 bundle exec fastlane lint                # SwiftLint
 bundle exec fastlane format              # SwiftFormat (in place)
 bundle exec fastlane quality             # format --lint + lint

@@ -7,7 +7,7 @@ This file is for Claude Code specifically. The primary AI guidance lives in [AGE
 - **Project:** Aria — composable on-device agent runtime for Apple platforms.
 - **Status:** Architecture and design phase. Implementation has not yet begun.
 - **Source of truth:** `docs/`. The protocols and types described in `docs/layers/` are the target architecture.
-- **Independence:** This is a clean-room project. **Do not copy code or documentation from LangChain.js, LangGraph.js, or any other framework.** See [NOTICE.md](NOTICE.md).
+- **Independence:** This is a clean-room project. **Do not copy code or documentation from other frameworks, like LangChain.js, LangGraph.js, or any other framework.** See [NOTICE.md](NOTICE.md).
 
 ## One-time setup
 
@@ -19,25 +19,40 @@ bundle install                # fastlane
 
 ## Common commands
 
+**Use Fastlane for everything.** Local development and CI run the
+same lanes — if it passes here, it passes there. Don't reach for
+`swift build`, `swift test`, or `xcodebuild` directly; pick a lane.
+
 ```bash
-# Package
-swift build                              # build all targets
-swift test                               # all tests
-swift test --filter AriaTests            # core tests (Linux-safe)
-swift run AriaCLI                        # CLI demo
+# Package (Aria core + AriaApple + AriaTesting + AriaTools)
+bundle exec fastlane package_build       # build all targets
+bundle exec fastlane package_tests       # all tests
+bundle exec fastlane core_tests          # core tests only (Linux-safe)
+bundle exec fastlane cli_demo            # run the CLI demo
 
-# Fastlane (preferred)
-bundle exec fastlane package_tests       # swift test wrapped
-bundle exec fastlane core_tests          # core tests only
-bundle exec fastlane sample_build        # build AriaSample on iOS Simulator
+# App (Avyra, the iOS app on top of Aria)
+bundle exec fastlane app_local_build                                  # build for iOS Simulator
+bundle exec fastlane app_local_build device:'iPhone 17 Pro' clean:true # named device + clean
+bundle exec fastlane app_tests                                        # run Avyra tests on Simulator
+
+# Code quality
 bundle exec fastlane lint                # SwiftLint
-bundle exec fastlane format              # SwiftFormat
-bundle exec fastlane quality             # both, lint mode
+bundle exec fastlane format              # SwiftFormat (in place)
+bundle exec fastlane quality             # format --lint + lint
 bundle exec fastlane quality fix:true    # both, auto-fix
-
-# AriaSample directly
-open Examples/SampleApp/AriaSample.xcodeproj
 ```
+
+Only direct invocation that's normal: opening the project in Xcode.
+
+```bash
+open Apps/AvyraApp/Avyra.xcodeproj
+```
+
+Anything else that wants to bypass Fastlane probably means a missing
+lane — add one in `fastlane/Fastfile` rather than running raw
+`swift`/`xcodebuild`. The only current gap is the `MLX/` sub-package
+(its own `Package.swift`); CI handles that with `cd MLX && swift
+build && swift test`.
 
 See `AGENTS.md` for the full lane reference.
 
@@ -50,7 +65,10 @@ See `AGENTS.md` for the full lane reference.
 
 ## Things Claude Code should not do
 
-- Run `xcodebuild` proactively. Only run it when the user asks.
+- Run `xcodebuild`, `swift build`, `swift test`, or `swift run`
+  directly. Use the matching Fastlane lane every time. Only fall
+  back to a raw invocation when the user explicitly asks or there
+  is genuinely no lane (today: just the `MLX/` sub-package).
 - Add Apple imports to the `Aria` target.
 - Introduce dependencies without asking.
 - Create stub implementations for unrelated layers when working on one layer.

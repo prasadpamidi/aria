@@ -20,6 +20,8 @@ import Foundation
 /// No Apple-only dependencies — the CLI compiles + runs on Linux too.
 @main
 enum AriaCLI {
+    // MARK: Internal
+
     static func main() async {
         print("Aria \(AriaInfo.version) — record + replay demo")
         print("AriaTesting \(AriaTesting.version)")
@@ -122,6 +124,7 @@ struct EchoTool: Tool {
 
     static let name = "echo"
     static let description = "Echo a string back."
+
     static var inputSchema: JSONSchema {
         .object(properties: ["text": .string()], required: ["text"])
     }

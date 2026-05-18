@@ -13,7 +13,8 @@ excluded:
   - "**/.build"
   - "**/SourcePackages"
   - "**/DerivedData"
-  - Examples                 # Sample apps aren't library code; don't enforce strict style there.
+  - Apps/AriaTests
+  - Apps/AriaUITests
 
 # Opt-in rules (stricter quality bar)
 opt_in_rules:

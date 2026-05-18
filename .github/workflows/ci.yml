@@ -49,6 +49,8 @@ jobs:
 
   # ------------------------------------------------------------------
   # macOS — full build & test of every target including AriaApple.
+  # Driven by Fastlane lanes so the local dev workflow and CI run
+  # the exact same commands. See `fastlane/Fastfile` for definitions.
   # ------------------------------------------------------------------
   macos:
     name: macOS — Full Build & Test
@@ -78,34 +80,37 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
-      - name: Build all targets (root package)
-        run: swift build
+      - name: Set up Ruby + bundler (for Fastlane)
+        uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
 
-      - name: Run root-package tests
-        run: swift test
+      - name: Run root-package build + tests via Fastlane
+        run: bundle exec fastlane package_tests
 
-      - name: Build AriaMLX sub-package
+      - name: Run CLI demo via Fastlane
+        run: bundle exec fastlane cli_demo
+
+      - name: Build + test AriaMLX sub-package
         # AriaMLX moved to its own SwiftPM package so consumers
         # (e.g. iOS apps using only FoundationModels) don't pull in
         # `swift-transformers-mlx` and conflict with WhisperKit's
-        # transitive pin. Build + test it independently.
+        # transitive pin. Build + test it independently. No
+        # Fastlane lane yet because the sub-package has its own
+        # `Package.swift` — kept as a direct `swift test` until the
+        # MLX sub-package gains its own Fastlane wrapper.
         run: |
           cd MLX
           swift build
-
-      - name: Run AriaMLX tests
-        run: |
-          cd MLX
           swift test
 
-      - name: Run CLI demo
-        run: swift run AriaCLI
-
   # ------------------------------------------------------------------
-  # iOS — build AriaSample on iOS Simulator (also exercises AriaApple).
+  # iOS — build the Avyra app on iOS Simulator (also exercises AriaApple).
+  # Uses the Fastlane lane that local developers run, so any CI-only
+  # surprise is also a local-dev surprise.
   # ------------------------------------------------------------------
-  ios-sample:
-    name: iOS — AriaSample Build
+  ios-app:
+    name: iOS — Avyra Build
     runs-on: macos-15
     steps:
       - name: Checkout
@@ -128,33 +133,18 @@ jobs:
             fi
           done
 
-      - name: Resolve package dependencies
-        # Xcode 26 sometimes tries to read git config from a SwiftPM
-        # cache path before resolution has populated it, failing with
-        # "cannot change to .../repositories/<pkg>: No such file or
-        # directory". Force a clean resolve into a workspace-local
-        # cache so the build step finds everything pre-cloned.
-        run: |
-          xcodebuild -resolvePackageDependencies \
-            -project Examples/SampleApp/AriaSample.xcodeproj \
-            -scheme AriaSample \
-            -clonedSourcePackagesDirPath .spm-cache \
-            -skipPackagePluginValidation
+      - name: Set up Ruby + bundler (for Fastlane)
+        uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
 
-      - name: Build AriaSample for iOS Simulator
-        run: |
-          xcodebuild build \
-            -project Examples/SampleApp/AriaSample.xcodeproj \
-            -scheme AriaSample \
-            -destination 'generic/platform=iOS Simulator' \
-            -clonedSourcePackagesDirPath .spm-cache \
-            -skipPackagePluginValidation \
-            CODE_SIGN_IDENTITY='' \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+      - name: Build Avyra for iOS Simulator via Fastlane
+        run: bundle exec fastlane app_local_build
 
   # ------------------------------------------------------------------
-  # Quality — SwiftFormat + SwiftLint checks across the codebase.
+  # Quality — SwiftFormat + SwiftLint checks via Fastlane's
+  # `ci_quality` lane. Same command developers run pre-commit, so
+  # the bar is consistent across local + CI.
   # ------------------------------------------------------------------
   quality:
     name: Quality — SwiftFormat & SwiftLint
@@ -171,16 +161,10 @@ jobs:
           swiftformat --version
           swiftlint version
 
-      - name: SwiftFormat (lint)
-        run: |
-          swiftformat \
-            Sources Tests MLX/Sources MLX/Tests \
-            --config .swiftformat \
-            --lint
+      - name: Set up Ruby + bundler (for Fastlane)
+        uses: ruby/setup-ruby@v1
+        with:
+          bundler-cache: true
 
-      - name: SwiftLint
-        run: |
-          swiftlint lint \
-            Sources Tests MLX/Sources MLX/Tests \
-            --config .swiftlint.yml \
-            --strict
+      - name: Run quality checks via Fastlane
+        run: bundle exec fastlane ci_quality
