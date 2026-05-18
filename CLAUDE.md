@@ -31,9 +31,9 @@ bundle exec fastlane core_tests          # core tests only (Linux-safe)
 bundle exec fastlane cli_demo            # run the CLI demo
 
 # App (Avyra, the iOS app on top of Aria)
-bundle exec fastlane app_local_build                                  # build for iOS Simulator
+bundle exec fastlane app_local_build                                  # build for generic iOS Simulator
 bundle exec fastlane app_local_build device:'iPhone 17 Pro' clean:true # named device + clean
-bundle exec fastlane app_tests                                        # run Avyra tests on Simulator
+bundle exec fastlane app_tests                                        # run Avyra tests on Simulator (named device required)
 
 # Code quality
 bundle exec fastlane lint                # SwiftLint
