@@ -155,7 +155,17 @@ let package = Package(
         // Linux as an empty shell.
         .target(
             name: "WorkflowKit",
-            dependencies: ["Aria", "AriaTools", "AriaToolsJS"],
+            dependencies: [
+                "Aria",
+                "AriaTools",
+                "AriaToolsJS",
+                // GRDB powers the on-disk workflow store. Apple-only,
+                // so the `Storage/` subfolder is wrapped in
+                // `#if canImport(GRDB)` and the target compiles empty
+                // on Linux. Same dep AriaApple already uses; SPM
+                // resolves a single GRDB instance for the package.
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ],
             path: "Sources/WorkflowKit"
         ),
 
