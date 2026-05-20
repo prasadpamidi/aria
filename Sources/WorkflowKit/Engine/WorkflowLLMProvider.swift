@@ -1,3 +1,4 @@
+import Aria
 import Foundation
 
 // MARK: - WorkflowLLMProvider
@@ -29,13 +30,16 @@ public protocol WorkflowLLMProvider: Sendable {
 /// can exercise non-JS workflow paths end-to-end.
 public protocol WorkflowJSEvaluator: Sendable {
     /// Evaluate a JS expression against the workflow bindings.
-    /// Returns the expression's result as a `JSONValue`. The
-    /// compiler is responsible for binding the result into
+    /// Bindings arrive as their native `JSONValue` shape; the
+    /// implementation is responsible for translating to a JS
+    /// object the expression can reference (typically as `b`).
+    /// Returns the expression's result as a `JSONValue` so the
+    /// compiler can bind it directly into
     /// `WorkflowState.bindings` under the step's `outputBinding`.
     func evaluate(
         expression: String,
-        bindings: [String: String]
-    ) async throws -> String
+        bindings: [String: JSONValue]
+    ) async throws -> JSONValue
 
     /// Specialised path for branch predicates — the expression
     /// must evaluate to a boolean. Kept separate so the runtime
@@ -43,7 +47,7 @@ public protocol WorkflowJSEvaluator: Sendable {
     /// condition into a `BranchStep`.
     func evaluateBool(
         expression: String,
-        bindings: [String: String]
+        bindings: [String: JSONValue]
     ) async throws -> Bool
 }
 
@@ -58,11 +62,17 @@ public struct ThrowingJSEvaluator: WorkflowJSEvaluator {
 
     // MARK: Public
 
-    public func evaluate(expression _: String, bindings _: [String: String]) async throws -> String {
+    public func evaluate(
+        expression _: String,
+        bindings _: [String: JSONValue]
+    ) async throws -> JSONValue {
         throw WorkflowEngineError.jsEvaluatorUnavailable
     }
 
-    public func evaluateBool(expression _: String, bindings _: [String: String]) async throws -> Bool {
+    public func evaluateBool(
+        expression _: String,
+        bindings _: [String: JSONValue]
+    ) async throws -> Bool {
         throw WorkflowEngineError.jsEvaluatorUnavailable
     }
 }

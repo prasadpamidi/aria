@@ -214,12 +214,14 @@ public struct BranchStep: Codable, Sendable, Equatable {
         id: UUID = UUID(),
         condition: String,
         trueBranch: [UUID] = [],
-        falseBranch: [UUID] = []
+        falseBranch: [UUID] = [],
+        joinNodeID: UUID? = nil
     ) {
         self.id = id
         self.condition = condition
         self.trueBranch = trueBranch
         self.falseBranch = falseBranch
+        self.joinNodeID = joinNodeID
     }
 
     // MARK: Public
@@ -228,6 +230,14 @@ public struct BranchStep: Codable, Sendable, Equatable {
     public let condition: String
     public let trueBranch: [UUID]
     public let falseBranch: [UUID]
+    /// Node both branches converge to. After the chosen branch's
+    /// last entry runs, control transfers here. When `nil`, the
+    /// compiler falls back to the node-after-the-branch in
+    /// workflow declaration order — which only does what the
+    /// author wants when each branch list has exactly one entry
+    /// and the next node is the merge point. Authors building
+    /// multi-step branches should set this explicitly.
+    public let joinNodeID: UUID?
 }
 
 // MARK: - ParallelStep

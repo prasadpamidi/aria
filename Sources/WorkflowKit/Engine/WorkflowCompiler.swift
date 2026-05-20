@@ -53,7 +53,8 @@ public struct WorkflowCompiler: Sendable {
             workflow: workflow,
             names: names,
             callerPluginID: callerPluginID,
-            attended: attended
+            attended: attended,
+            branchExitOverrides: Self.computeBranchExitOverrides(workflow: workflow)
         )
 
         for (index, node) in workflow.nodes.enumerated() {
@@ -73,13 +74,70 @@ public struct WorkflowCompiler: Sendable {
         let names: [String]
         let callerPluginID: String
         let attended: Bool
+        /// Map of node-id-string → target-name for branch list
+        /// entries. When a node is reachable as a branch arm, its
+        /// outbound linear-default transition must skip past the
+        /// other branch arm and go straight to the merge point.
+        /// Computed once at `compile` time; consumed by `emit`'s
+        /// linear-default path.
+        let branchExitOverrides: [String: String]
+    }
+
+    /// Visible to the per-node extension in
+    /// `WorkflowCompiler+Nodes.swift`. Effectively private to
+    /// the compiler's lowering — the extension lives in the same
+    /// target.
+    let broker: CapabilityBroker
+    let llmProvider: any WorkflowLLMProvider
+    let jsEvaluator: any WorkflowJSEvaluator
+
+    /// Stable, namespaced binding key for a branch's predicate
+    /// outcome. Underscore-prefixed so it doesn't collide with
+    /// user-chosen `outputBinding` names (which can't start with
+    /// an underscore in practice — they're surface API).
+    static func branchResultBindingKey(branchID: UUID) -> String {
+        "__branch.\(branchID.uuidString)"
     }
 
     // MARK: Private
 
-    private let broker: CapabilityBroker
-    private let llmProvider: any WorkflowLLMProvider
-    private let jsEvaluator: any WorkflowJSEvaluator
+    /// Build the branch-exit override map. For each branch step,
+    /// each id in its true / false arm gets mapped to the
+    /// branch's `joinNodeID` (when set) or the next-after-branch
+    /// in workflow declaration order (the implicit join). This
+    /// lets the `default:` linear-edge code in `emit` skip past
+    /// sibling branch arms straight to the merge point.
+    private static func computeBranchExitOverrides(
+        workflow: Workflow
+    ) -> [String: String] {
+        var overrides: [String: String] = [:]
+        let names = workflow.nodes.map(\.id.uuidString)
+        for (index, node) in workflow.nodes.enumerated() {
+            guard case let .branch(branch) = node else {
+                continue
+            }
+            let armIDs = Set(branch.trueBranch + branch.falseBranch)
+            let joinName: String = {
+                if let explicit = branch.joinNodeID,
+                   let joinIndex = workflow.nodes.firstIndex(where: { $0.id == explicit }) {
+                    return names[joinIndex]
+                }
+                // Implicit join: the first node after the branch
+                // that ISN'T one of the branch's arms. Falling off
+                // the end means the only successor is `.end`.
+                let firstNonArm = ((index + 1)..<workflow.nodes.count)
+                    .first { !armIDs.contains(workflow.nodes[$0].id) }
+                guard let firstNonArm else {
+                    return StateGraph<WorkflowState>.end
+                }
+                return names[firstNonArm]
+            }()
+            for armEntry in armIDs {
+                overrides[armEntry.uuidString] = joinName
+            }
+        }
+        return overrides
+    }
 
     /// Emit one workflow node into the graph: install the node
     /// body and wire its outgoing transition. Split out of
@@ -106,7 +164,13 @@ public struct WorkflowCompiler: Sendable {
         case .output:
             graph.addEdge(from: name, to: StateGraph<WorkflowState>.end)
         default:
-            graph.addEdge(from: name, to: self.nextLinearNodeName(after: index, names: context.names))
+            // Branch-arm entries skip to the branch's join point
+            // rather than falling through to the next sibling.
+            if let override = context.branchExitOverrides[name] {
+                graph.addEdge(from: name, to: override)
+            } else {
+                graph.addEdge(from: name, to: self.nextLinearNodeName(after: index, names: context.names))
+            }
         }
     }
 
@@ -131,109 +195,15 @@ public struct WorkflowCompiler: Sendable {
             )
         case let .transform(step):
             self.addTransformNode(step: step, name: name, graph: &graph)
-        case .branch, .parallel:
-            // Passthrough in the node table — routing happens via
-            // the conditional / parallel edge added later. Still
-            // need a node body so the graph has an attachment
-            // point for the edge.
+        case let .branch(branch):
+            self.addBranchPredicateNode(branch: branch, name: name, graph: &graph)
+        case .parallel:
+            // Parallel passthrough — the fan-out / fan-in edge
+            // does the work. Still need a node body for the
+            // graph's attachment point.
             graph.addNode(name) { state in state }
         case let .output(step):
             self.addOutputNode(step: step, name: name, graph: &graph)
-        }
-    }
-
-    private func addLLMNode(
-        step: LLMStep,
-        name: String,
-        graph: inout StateGraph<WorkflowState>
-    ) {
-        let provider = self.llmProvider
-        graph.addNode(name) { state in
-            let prompt = TemplateInterpolator.render(step.promptTemplate, bindings: state.bindings)
-            let text = try await provider.generate(
-                prompt: prompt,
-                hint: step.modelHint,
-                maxTokens: step.maxTokens
-            )
-            var next = state
-            next.bindings[step.outputBinding] = .string(text)
-            return next
-        }
-    }
-
-    private func addCapabilityNode(
-        step: CapabilityStep,
-        name: String,
-        graph: inout StateGraph<WorkflowState>,
-        callerPluginID: String,
-        attended: Bool
-    ) {
-        let broker = self.broker
-        graph.addNode(name) { state in
-            // Interpolate every templated arg. Non-string values
-            // arrive verbatim (the JS std-lib bridge will accept
-            // any JSONValue once slice 10 wires it through; for
-            // now capability args are string-valued).
-            var resolved: [String: JSONValue] = [:]
-            for (key, template) in step.argsTemplate {
-                resolved[key] = .string(TemplateInterpolator.render(template, bindings: state.bindings))
-            }
-
-            let value = try await broker.call(
-                capability: step.capability,
-                method: step.method,
-                arguments: resolved,
-                callerPluginID: callerPluginID,
-                attended: attended
-            )
-
-            var next = state
-            next.bindings[step.outputBinding] = value
-            return next
-        }
-    }
-
-    private func addTransformNode(
-        step: TransformStep,
-        name: String,
-        graph: inout StateGraph<WorkflowState>
-    ) {
-        let evaluator = self.jsEvaluator
-        graph.addNode(name) { state in
-            // Flatten bindings into a string→string map for the
-            // JS bridge — `JSContext` accepts richer types, but
-            // the wire shape between the engine and the bridge
-            // stays simple here. Slice 10 will adopt a richer
-            // shape if it turns out to be needed.
-            let bindings = state.bindings.mapValues { value -> String in
-                if case let .string(string) = value {
-                    return string
-                }
-                return TemplateInterpolator.render("{{__value__}}", bindings: ["__value__": value])
-            }
-            let resultText = try await evaluator.evaluate(
-                expression: step.jsExpression,
-                bindings: bindings
-            )
-            var next = state
-            next.bindings[step.outputBinding] = .string(resultText)
-            return next
-        }
-    }
-
-    private func addOutputNode(
-        step: OutputStep,
-        name: String,
-        graph: inout StateGraph<WorkflowState>
-    ) {
-        graph.addNode(name) { state in
-            var next = state
-            for (fieldID, template) in step.fields {
-                next.result[fieldID] = .string(
-                    TemplateInterpolator.render(template, bindings: state.bindings)
-                )
-            }
-            return next
         }
     }
 
@@ -252,23 +222,21 @@ public struct WorkflowCompiler: Sendable {
         // if a referenced id isn't in the workflow.
         let trueTarget = branch.trueBranch.first?.uuidString ?? StateGraph<WorkflowState>.end
         let falseTarget = branch.falseBranch.first?.uuidString ?? StateGraph<WorkflowState>.end
+        let bindingKey = Self.branchResultBindingKey(branchID: branch.id)
 
-        let evaluator = self.jsEvaluator
-        let condition = branch.condition
-
-        // Conditional edges can't be `async`, but `evaluateBool`
-        // is. Snapshot the route decision into the workflow's
-        // state from a synchronous closure that consults a
-        // pre-computed value — this lands in slice 10 along with
-        // the real JS bridge. For now the conditional defaults
-        // to the true branch and surfaces a build-time warning
-        // (slice 10 swaps in proper handling).
-        _ = condition
-        _ = evaluator
         graph.addConditionalEdge(
             from: name,
             targets: [trueTarget, falseTarget]
-        ) { _ in trueTarget }
+        ) { state in
+            // The branch predicate node ran first and stored the
+            // boolean outcome in the binding map. Default to the
+            // false branch on missing or non-bool values so a
+            // mis-typed predicate fails closed.
+            if case let .bool(value) = state.bindings[bindingKey], value {
+                return trueTarget
+            }
+            return falseTarget
+        }
     }
 
     private func wireParallel(
