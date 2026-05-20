@@ -4,10 +4,12 @@ import XCTest
 
 /// Tests-first spec for `FactExtractionMiddleware`.
 ///
-/// Runs in `afterStep` (after the assistant has replied) and scans the
-/// just-finished user turn for durable facts the model didn't explicitly
-/// call `remember_user_fact` on. Writes extracted facts to a
-/// `MemoryStore` so they survive across threads. Background, fail-open.
+/// Runs in `afterStep` (after the assistant has replied) and scans
+/// the just-finished user turn for durable facts, proposing each
+/// one to a `MemoryGate`. The gate owns validation + dedup + the
+/// write — these tests cover the middleware's responsibilities:
+/// gating on user turn, multi-fact decomposition, fail-open on
+/// extractor errors, metadata pass-through, and state preservation.
 final class FactExtractionMiddlewareTests: XCTestCase {
     // MARK: Internal
 
@@ -116,15 +118,17 @@ final class FactExtractionMiddlewareTests: XCTestCase {
     // MARK: - Metadata
 
     func testExtractedFactsAreTaggedWithThreadIdAndSource() async throws {
-        // Useful for later auditability — a user reviewing what Niora
-        // remembers should be able to trace back to which thread the
-        // fact came from. The `source = "auto_extracted"` tag also
-        // distinguishes these from facts the model explicitly called
-        // `remember_user_fact` on, in case we want different retention
-        // or display rules.
-        let extractor = RecordingExtractor(facts: ["fact-1"])
+        // Source ("auto_extracted") is stamped by the gate; thread_id
+        // is forwarded by the middleware via its extraMetadata
+        // closure. Verifies both ends of the contract land on the
+        // same MemoryItem.
+        let extractor = RecordingExtractor(facts: ["user lives in Berlin"])
         let memory = RecordingMemory()
-        let middleware = self.makeMiddleware(extractor: extractor, memory: memory)
+        let middleware = FactExtractionMiddleware(
+            gate: self.makePassthroughGate(memory: memory),
+            extractor: { _ in ["user lives in Berlin"] },
+            extraMetadata: { state in ["thread_id": .string(state.threadId)] }
+        )
         let state = AgentState(threadId: "specific-thread", messages: [
             .user("source me")
         ])
@@ -136,15 +140,17 @@ final class FactExtractionMiddlewareTests: XCTestCase {
     }
 
     func testSkipsFactsAlreadyPresentAboveSimilarityThreshold() async throws {
-        // A fact that's already in memory at similarity 0.95 should
-        // be dropped — no point storing a near-duplicate that RAG
-        // recall would have surfaced anyway.
-        let extractor = RecordingExtractor(facts: ["user is vegetarian"])
+        // Dedup lives in the gate now. The middleware just proposes;
+        // the gate's threshold decides. Above-threshold matches must
+        // not result in a write.
         let memory = RecordingMemoryWithRecall(recallScore: 0.95)
         let middleware = FactExtractionMiddleware(
-            memory: memory,
-            namespace: ["user"],
-            dedupSimilarityThreshold: 0.9,
+            gate: ValidatingMemoryGate(
+                store: memory,
+                namespace: ["user"],
+                dedupThreshold: 0.9,
+                normalize: { fact, _ in fact }
+            ),
             extractor: { _ in ["user is vegetarian"] }
         )
         let state = AgentState(threadId: "t", messages: [.user("anything")])
@@ -156,12 +162,14 @@ final class FactExtractionMiddlewareTests: XCTestCase {
     func testWritesFactsBelowSimilarityThreshold() async throws {
         // A fact only weakly similar (0.5) to anything in memory is
         // genuinely new — write it.
-        let extractor = RecordingExtractor(facts: ["user is vegetarian"])
         let memory = RecordingMemoryWithRecall(recallScore: 0.5)
         let middleware = FactExtractionMiddleware(
-            memory: memory,
-            namespace: ["user"],
-            dedupSimilarityThreshold: 0.9,
+            gate: ValidatingMemoryGate(
+                store: memory,
+                namespace: ["user"],
+                dedupThreshold: 0.9,
+                normalize: { fact, _ in fact }
+            ),
             extractor: { _ in ["user is vegetarian"] }
         )
         let state = AgentState(threadId: "t", messages: [.user("anything")])
@@ -171,19 +179,45 @@ final class FactExtractionMiddlewareTests: XCTestCase {
     }
 
     func testDedupDisabledWhenThresholdIsNil() async throws {
-        // Nil threshold = no dedup pass — write everything the
-        // extractor returns. Matches pre-dedup behavior.
+        // Nil threshold on the gate = no dedup pass — write
+        // everything the extractor returns. Matches pre-dedup
+        // behavior.
         let memory = RecordingMemoryWithRecall(recallScore: 0.99)
         let middleware = FactExtractionMiddleware(
-            memory: memory,
-            namespace: ["user"],
-            dedupSimilarityThreshold: nil,
+            gate: ValidatingMemoryGate(
+                store: memory,
+                namespace: ["user"],
+                dedupThreshold: nil,
+                normalize: { fact, _ in fact }
+            ),
             extractor: { _ in ["near dup fact"] }
         )
         let state = AgentState(threadId: "t", messages: [.user("anything")])
         _ = try await middleware.afterStep(state)
         let stored = await memory.remembered.count
         XCTAssertEqual(stored, 1)
+    }
+
+    // MARK: - Gate validator gating
+
+    func testValidatorRejectionStopsWriteEvenWhenExtractorReturnedFact() async throws {
+        // The gate's validator is the load-bearing safeguard against
+        // weak chat models proposing world knowledge. A normalize
+        // closure that returns nil = "not a durable user fact" must
+        // result in no write, even when the extractor is happy.
+        let memory = RecordingMemory()
+        let middleware = FactExtractionMiddleware(
+            gate: ValidatingMemoryGate(
+                store: memory,
+                namespace: ["user"],
+                normalize: { _, _ in nil }
+            ),
+            extractor: { _ in ["India is in South Asia"] }
+        )
+        let state = AgentState(threadId: "t", messages: [.user("tell me about India")])
+        _ = try await middleware.afterStep(state)
+        let stored = await memory.remembered.count
+        XCTAssertEqual(stored, 0)
     }
 
     // MARK: - State preservation
@@ -301,14 +335,25 @@ final class FactExtractionMiddlewareTests: XCTestCase {
         }
     }
 
+    /// Gate that accepts every proposal verbatim and skips dedup.
+    /// The "passthrough" baseline for tests that aren't asserting
+    /// validator or dedup behavior.
+    private func makePassthroughGate(memory: any MemoryStore) -> ValidatingMemoryGate {
+        ValidatingMemoryGate(
+            store: memory,
+            namespace: ["user"],
+            dedupThreshold: nil,
+            normalize: { fact, _ in fact }
+        )
+    }
+
     private func makeMiddleware(
         extractor: RecordingExtractor,
-        memory: RecordingMemory,
-        namespace: [String] = ["user"]
+        memory: any MemoryStore,
+        namespace _: [String] = ["user"]
     ) -> FactExtractionMiddleware {
         FactExtractionMiddleware(
-            memory: memory,
-            namespace: namespace,
+            gate: self.makePassthroughGate(memory: memory),
             extractor: { message in
                 try await extractor.extract(from: message)
             }

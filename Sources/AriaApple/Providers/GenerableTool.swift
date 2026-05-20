@@ -36,6 +36,15 @@
     /// spell out the same tool twice.
     @available(iOS 26.0, macOS 26.0, *)
     public struct FoundationModelsToolKit: Sendable {
+        // MARK: Lifecycle
+
+        public init(anyTool: AnyTool, factory: @escaping FoundationModelsToolFactory) {
+            self.anyTool = anyTool
+            self.factory = factory
+        }
+
+        // MARK: Public
+
         public let anyTool: AnyTool
         public let factory: FoundationModelsToolFactory
     }

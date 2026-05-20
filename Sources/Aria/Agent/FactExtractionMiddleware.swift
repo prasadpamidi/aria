@@ -3,43 +3,27 @@ import Foundation
 // MARK: - FactExtractionMiddleware
 
 /// After each turn, scans the latest user message for durable facts
-/// and writes them to a `MemoryStore` so they survive across threads.
+/// and proposes each one to a `MemoryGate` for persistence.
 ///
-/// **What this is for.** Today the only way the model accumulates
-/// long-term user knowledge is to *explicitly* call a
-/// `remember_user_fact` tool mid-turn. That's lossy — the model has
-/// to decide a fact is durable, and if it doesn't, the fact dies with
-/// the thread. This middleware adds an *automatic* path: every user
-/// turn is post-processed by a caller-supplied extractor (typically a
-/// cheap LLM) that returns a list of "facts worth remembering."
+/// **Two-stage architecture.** This middleware owns *message-level
+/// decomposition*: it asks an extractor LLM to turn one user
+/// message into a list of candidate fact strings. It does **not**
+/// own validation, dedup, or the write itself — those are the
+/// `MemoryGate`'s job. Routing through a gate means this auto path
+/// and the `RememberTool` proposal path share one policy: the
+/// validator inside the gate decides what counts as a durable user
+/// fact, the gate dedupes against existing memory, and the gate
+/// stamps `source` metadata.
 ///
-/// **What it preserves.** It runs in `afterStep`, by which point the
-/// agent has already produced its reply — the user has seen the
-/// response. Extraction is observational: it never modifies state,
-/// never delays the next turn (caller can spawn it as a background
-/// task if latency matters; the default fire-and-forget shape lets
-/// the agent loop continue while extraction runs).
+/// **Cost.** One extractor call per user turn, plus one validator
+/// call per candidate fact inside the gate. Both are typically
+/// cheap (auxiliary LLMs); the gate's validator dominates the
+/// pipeline-correctness end of things.
 ///
-/// **Cost.** One extractor call per turn where the latest message is
-/// a user message. The extractor is typically a cheap LLM; budget
-/// accordingly. The middleware doesn't dedupe — the extractor is
-/// expected to either return zero facts ("no new info worth saving")
-/// or facts that don't already exist in memory. A `MemoryStore` that
-/// supports similarity-based deduplication on `remember` would be a
-/// natural place to add that.
-///
-/// **Graceful degradation.** Extractor errors are swallowed; memory
-/// write failures are logged but never thrown. The agent's reply has
-/// already been delivered to the user — failing the turn here would
-/// be user-visible while gaining nothing.
-///
-/// **Tagging.** Stored facts carry two metadata fields:
-///   - `source = "auto_extracted"` — distinguishes from facts the
-///     model explicitly called `remember_user_fact` on. Useful for
-///     audit / display rules / different retention policies later.
-///   - `thread_id = <the thread the fact came from>` — auditability:
-///     a user reviewing remembered facts can trace back to the
-///     originating conversation.
+/// **Graceful degradation.** Extractor errors are swallowed; gate
+/// rejections are not retried; gate write failures are swallowed.
+/// The agent's reply has already been delivered — failing this
+/// observational pass would be user-visible while gaining nothing.
 ///
 /// **Ordering.** Wire after the agent loop completes (which is what
 /// `afterStep` is for). Position in the middleware chain doesn't
@@ -48,22 +32,27 @@ public struct FactExtractionMiddleware: AgentMiddleware {
     // MARK: Lifecycle
 
     /// - Parameters:
-    ///   - memory: The store extracted facts get written into.
-    ///   - namespace: Per-user namespace (typically `["user"]` or a
-    ///     `["user", <userId>]` path).
+    ///   - gate: Sole authority for memory writes. The middleware
+    ///     proposes candidate facts; the gate validates, dedupes,
+    ///     and persists.
     ///   - extractor: Async function the middleware calls with the
-    ///     latest user message, returns a list of fact strings. An
-    ///     empty list means "nothing worth saving from this turn."
+    ///     latest user message, returns a list of candidate fact
+    ///     strings. An empty list means "nothing worth saving from
+    ///     this turn." The extractor is *separate* from the gate's
+    ///     validator — extractor does message decomposition, gate
+    ///     does per-fact validation.
+    ///   - extraMetadata: Optional caller-provided metadata merged
+    ///     into each accepted memory (e.g. `["thread_id": …]` for
+    ///     audit). The gate adds `source = "auto_extracted"`
+    ///     automatically; callers don't need to set it.
     public init(
-        memory: any MemoryStore,
-        namespace: [String],
-        dedupSimilarityThreshold: Float? = 0.9,
-        extractor: @escaping @Sendable (Message) async throws -> [String]
+        gate: any MemoryGate,
+        extractor: @escaping @Sendable (Message) async throws -> [String],
+        extraMetadata: @escaping @Sendable (AgentState) -> [String: JSONValue] = { _ in [:] }
     ) {
-        self.memory = memory
-        self.namespace = namespace
-        self.dedupSimilarityThreshold = dedupSimilarityThreshold
+        self.gate = gate
         self.extractor = extractor
+        self.extraMetadata = extraMetadata
     }
 
     // MARK: Public
@@ -79,7 +68,8 @@ public struct FactExtractionMiddleware: AgentMiddleware {
         do {
             facts = try await self.extractor(latest)
         } catch {
-            // Fail-open: extraction failure shouldn't break the turn.
+            // Fail-open at the extraction stage: extractor failure
+            // shouldn't break the user-visible turn.
             return state
         }
 
@@ -87,31 +77,20 @@ public struct FactExtractionMiddleware: AgentMiddleware {
             return state
         }
 
+        let metadata = self.extraMetadata(state)
         for fact in facts {
-            // Dedup: before writing, query the store for similar
-            // existing memories. If anything in memory matches above
-            // the configured threshold, skip — RAG recall would
-            // surface that fact anyway, and a near-dup just clutters
-            // the user's memories list. Skipped entirely when the
-            // threshold is nil (legacy / opt-out behavior).
-            if let threshold = self.dedupSimilarityThreshold,
-               try await self.isDuplicate(fact, threshold: threshold) {
-                continue
-            }
-
-            let metadata: [String: JSONValue] = [
-                "source": .string("auto_extracted"),
-                "thread_id": .string(state.threadId)
-            ]
             do {
-                _ = try await self.memory.remember(
-                    MemoryItem(content: fact, metadata: metadata),
-                    namespace: self.namespace
+                _ = try await self.gate.propose(
+                    fact: fact,
+                    source: .autoExtracted,
+                    metadata: metadata
                 )
             } catch {
-                // Log-and-swallow: one failed fact write shouldn't
-                // skip the rest, and definitely shouldn't fail the
-                // user-visible turn.
+                // Per-fact gate failures are logged at the gate
+                // level; skip the rest of the batch only if the
+                // failure is fatal (it's not — propose throws only
+                // for unrecoverable store errors and even then we
+                // want to try the next fact).
                 continue
             }
         }
@@ -121,30 +100,7 @@ public struct FactExtractionMiddleware: AgentMiddleware {
 
     // MARK: Private
 
-    private let memory: any MemoryStore
-    private let namespace: [String]
-    private let dedupSimilarityThreshold: Float?
+    private let gate: any MemoryGate
     private let extractor: @Sendable (Message) async throws -> [String]
-
-    /// True when something in memory matches `fact` above the
-    /// threshold. A recall failure (e.g. embedder unavailable) treats
-    /// the fact as non-duplicate — better to record a near-dup than
-    /// silently lose a fact because recall transiently failed.
-    private func isDuplicate(_ fact: String, threshold: Float) async throws -> Bool {
-        let matches: [MemoryMatch]
-        do {
-            matches = try await self.memory.recall(
-                query: fact,
-                namespace: self.namespace,
-                topK: 1,
-                filter: nil
-            )
-        } catch {
-            return false
-        }
-        guard let top = matches.first else {
-            return false
-        }
-        return top.score >= threshold
-    }
+    private let extraMetadata: @Sendable (AgentState) -> [String: JSONValue]
 }

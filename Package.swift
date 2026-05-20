@@ -32,6 +32,20 @@ let package = Package(
 
         // Cross-platform tool implementations.
         .library(name: "AriaTools", targets: ["AriaTools"]),
+
+        // Apple-only JavaScript tool plugin runtime. Loads
+        // `.avyra-tool` JSON bundles (manifest + embedded JS) and
+        // vends them as `AnyTool`s the agent can call. Sandboxed
+        // per-tool `JSContext`s; capabilities (HTTP, JSON, clipboard,
+        // share, notify, storage) are gated by per-tool manifest
+        // declarations enforced at bridge-construction time.
+        .library(name: "AriaToolsJS", targets: ["AriaToolsJS"]),
+
+        // Apple-platform voice: STT (Speech.framework), TTS protocol +
+        // AVSpeechSynthesizer-backed default impl, and the voice-mode
+        // state machine. Apps that want on-device higher-quality TTS
+        // add `AriaVoiceKokoro` from the `./Voice/` sibling package.
+        .library(name: "AriaVoice", targets: ["AriaVoice"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
@@ -41,6 +55,12 @@ let package = Package(
         // an exporter (swift-otel, etc.) at process start to send data
         // anywhere. Aria emits OTel GenAI semantic-convention attributes.
         .package(url: "https://github.com/apple/swift-distributed-tracing.git", from: "1.1.2"),
+        // Direct dep on swift-service-context so we can explicitly
+        // surface `ServiceContextModule` as an Aria-target link
+        // dependency — needed for Xcode's dynamic-framework wrapping
+        // of Aria during `xcodebuild test` (see comment in the Aria
+        // target's dependencies list).
+        .package(url: "https://github.com/apple/swift-service-context.git", from: "1.0.0"),
         .package(url: "https://github.com/apple/swift-metrics.git", from: "2.5.0"),
         // Persistent memory (chat history + checkpointer) for AriaApple.
         // Apple-only — `Aria` core never imports it.
@@ -55,6 +75,17 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Collections", package: "swift-collections"),
                 .product(name: "Tracing", package: "swift-distributed-tracing"),
+                // `withSpan(_:ofKind:_:)` from Tracing internally reads
+                // `ServiceContext.current` (a TaskLocal stored in the
+                // ServiceContextModule product). When Aria is built as a
+                // dynamic framework (e.g. by Xcode under `xcodebuild test`),
+                // the framework's link spec must list ServiceContextModule
+                // explicitly — Tracing's transitive declaration isn't
+                // honored by the framework wrapper, leading to undefined
+                // `ServiceContext.{current,topLevel}` symbols. Listing it
+                // here is a no-op at the static-library link layer but
+                // unblocks the test framework build.
+                .product(name: "ServiceContextModule", package: "swift-service-context"),
                 .product(name: "Metrics", package: "swift-metrics"),
             ],
             path: "Sources/Aria"
@@ -81,6 +112,30 @@ let package = Package(
             path: "Sources/AriaTools"
         ),
 
+        // AriaToolsJS depends on AriaTools so JS authors get access
+        // to the same primitives (HTTP, JSON, calculator, regex) via
+        // the `Avyra.*` bridge object that Swift authors use
+        // natively. JavaScriptCore is Apple-only; sources are
+        // guarded with `#if canImport(JavaScriptCore)` so the
+        // target compiles empty on Linux.
+        .target(
+            name: "AriaToolsJS",
+            dependencies: ["Aria", "AriaTools"],
+            path: "Sources/AriaToolsJS"
+        ),
+
+        // AriaVoice has no Aria-core dependency — it's a standalone
+        // STT+TTS+controller library that consumers wire to their own
+        // chat pipeline via `VoiceController.bindSender(_:)`. Sources
+        // are guarded with `#if canImport(Speech) && canImport(AVFoundation)`,
+        // so the target compiles empty on platforms (tvOS, Linux) that
+        // lack one of those frameworks rather than failing the build.
+        .target(
+            name: "AriaVoice",
+            dependencies: [],
+            path: "Sources/AriaVoice"
+        ),
+
         // MARK: - Test targets
 
         .testTarget(
@@ -93,6 +148,18 @@ let package = Package(
             name: "AriaAppleTests",
             dependencies: ["Aria", "AriaApple", "AriaTesting"],
             path: "Tests/AriaAppleTests"
+        ),
+
+        .testTarget(
+            name: "AriaToolsTests",
+            dependencies: ["Aria", "AriaTools", "AriaTesting"],
+            path: "Tests/AriaToolsTests"
+        ),
+
+        .testTarget(
+            name: "AriaToolsJSTests",
+            dependencies: ["Aria", "AriaTools", "AriaToolsJS", "AriaTesting"],
+            path: "Tests/AriaToolsJSTests"
         ),
 
         // MARK: - Apps

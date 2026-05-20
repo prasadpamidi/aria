@@ -220,7 +220,7 @@ Routine work goes through Fastlane lanes:
 
 ```bash
 bundle exec fastlane package_tests       # swift test
-bundle exec fastlane sample_build        # build Avyra on iOS Simulator
+bundle exec fastlane app_local_build        # build Avyra on iOS Simulator
 bundle exec fastlane lint                # SwiftLint
 bundle exec fastlane format              # SwiftFormat (in place)
 bundle exec fastlane quality             # format --lint + lint
