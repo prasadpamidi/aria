@@ -107,12 +107,14 @@ public struct LLMStep: Codable, Sendable, Equatable {
     public init(
         id: UUID = UUID(),
         promptTemplate: String,
+        outputBinding: String = "text",
         structuredOutputSchema: String? = nil,
         modelHint: ModelFamilyHint = .any,
         maxTokens: Int? = nil
     ) {
         self.id = id
         self.promptTemplate = promptTemplate
+        self.outputBinding = outputBinding
         self.structuredOutputSchema = structuredOutputSchema
         self.modelHint = modelHint
         self.maxTokens = maxTokens
@@ -122,6 +124,12 @@ public struct LLMStep: Codable, Sendable, Equatable {
 
     public let id: UUID
     public let promptTemplate: String
+    /// Slot in `WorkflowState.bindings` where the model's reply
+    /// lands. Templates downstream reference it as `{{name}}`.
+    /// Defaults to `"text"` so a single LLM step in a linear
+    /// workflow can be referenced as `{{text}}` without extra
+    /// configuration.
+    public let outputBinding: String
     /// JSONSchema-as-string. Slice 5 parses + binds field by field.
     public let structuredOutputSchema: String?
     public let modelHint: ModelFamilyHint
