@@ -52,3 +52,6 @@ Icon
 
 # Logs
 *.log
+
+# Local git worktrees (Claude / superpowers convention)
+.worktrees/
