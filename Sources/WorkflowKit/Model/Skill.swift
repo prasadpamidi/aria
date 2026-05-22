@@ -63,7 +63,7 @@ public struct Skill: Codable, Identifiable, Hashable, Sendable {
     public enum Origin: String, Codable, Sendable {
         /// Created in-app via the authoring editor.
         case authored
-        /// Imported from an `.avyra-skill` zip on the device.
+        /// Imported from a `.zip` skill bundle on the device.
         case imported
         /// Fetched from a remote URL (raw `SKILL.md` or zip).
         case downloaded
