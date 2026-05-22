@@ -154,7 +154,18 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install tooling
-        run: brew install swiftformat swiftlint
+        run: |
+          # Pin swiftformat to a specific version so the CI's lint
+          # rules don't drift relative to the version developers
+          # install locally via Homebrew. 0.61.1 ships fixes for
+          # the `indent` + `trailingSpace` over-eager behaviour on
+          # empty lines inside multi-line string literals that
+          # 0.61.0 still flags.
+          brew install swiftlint
+          curl -fsSL https://github.com/nicklockwood/SwiftFormat/releases/download/0.61.1/swiftformat.zip -o /tmp/swiftformat.zip
+          unzip -q /tmp/swiftformat.zip -d /tmp/swiftformat
+          sudo install /tmp/swiftformat/swiftformat /usr/local/bin/swiftformat
+          swiftformat --version
 
       - name: Show tool versions
         run: |
