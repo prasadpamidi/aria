@@ -127,6 +127,28 @@
             }
         }
 
+        /// Persist an authored or edited bundle. Writes the manifest
+        /// to the bundles directory using the bundle's `id` as the
+        /// filename, then reloads so the new/edited tool becomes
+        /// available immediately. Used by the in-app authoring UI
+        /// (`JSPluginAuthoringScreen`) — the file-import path
+        /// (`install(from:)`) handles externally-supplied bundles.
+        @discardableResult
+        public func save(_ bundle: JSToolBundle) throws -> JSToolBundle {
+            try FileManager.default.createDirectory(
+                at: self.bundlesDirectory,
+                withIntermediateDirectories: true
+            )
+            let destination = self.bundlesDirectory.appendingPathComponent(
+                "\(bundle.id).avyra-tool",
+                isDirectory: false
+            )
+            let data = try bundle.encoded()
+            try data.write(to: destination, options: .atomic)
+            self.reload()
+            return bundle
+        }
+
         /// Copy a `.avyra-tool` file into the managed directory and
         /// reload. The source URL is read once; the destination filename
         /// is derived from the bundle's `id` so collisions overwrite
@@ -148,6 +170,41 @@
             try FileManager.default.copyItem(at: sourceURL, to: destination)
             self.reload()
             return bundle
+        }
+
+        /// Execute a candidate bundle's `call(input)` once in a
+        /// throw-away runtime and return the resolved value. Used by
+        /// the authoring UI to "try this without saving". The runtime
+        /// is spun up fresh and torn down after the call so a broken
+        /// in-progress bundle can't poison the installed surface.
+        ///
+        /// Storage is scoped under a `__dryrun_…` suite so the
+        /// dry-run can't leak keys into the eventual saved tool's
+        /// real storage — and the suite is cleared after each run.
+        public func dryRun(
+            bundle: JSToolBundle,
+            input: JSONValue
+        ) async throws -> DryRunResult {
+            let suiteId = "__dryrun_\(bundle.id.isEmpty ? "untitled" : bundle.id)__"
+            let storage = JSToolStorage(toolId: suiteId)
+            let runtime = try JSToolRuntime(
+                bundle: bundle,
+                httpClient: self.httpClient,
+                storage: storage
+            )
+            defer {
+                runtime.shutdown()
+                storage.clearAll()
+            }
+            do {
+                let value = try await runtime.invoke(input)
+                return DryRunResult(value: value, logs: runtime.consumeLogs())
+            } catch {
+                // Logs captured *before* the throw are still useful
+                // for diagnosing what the JS got up to before
+                // exploding. Wrap so callers can pluck both out.
+                throw DryRunError(underlying: error, logs: runtime.consumeLogs())
+            }
         }
 
         /// Remove a previously-installed tool by id. Wipes its storage
@@ -193,5 +250,75 @@
                 }
             )
         }
+    }
+
+    // MARK: - DryRunResult
+
+    /// Outcome of a `JSToolProvider.dryRun` call. Bundles the
+    /// returned JSON value alongside every `console.*` message
+    /// the JS code emitted during the run, so the authoring UI
+    /// can show both at once.
+    public struct DryRunResult: Sendable {
+        // MARK: Lifecycle
+
+        public init(value: JSONValue, logs: [JSToolLogEntry]) {
+            self.value = value
+            self.logs = logs
+        }
+
+        // MARK: Public
+
+        public let value: JSONValue
+        public let logs: [JSToolLogEntry]
+    }
+
+    /// Thrown by `dryRun(bundle:input:)` when the JS code raises
+    /// — carries any captured logs from *before* the throw so
+    /// callers can still surface the partial output. Wraps the
+    /// underlying error rather than replacing it so callers can
+    /// still distinguish e.g. runtime evaluation failures from
+    /// promise rejections.
+    public struct DryRunError: Error, @unchecked Sendable {
+        // MARK: Lifecycle
+
+        public init(underlying: any Error, logs: [JSToolLogEntry]) {
+            self.underlying = underlying
+            self.logs = logs
+        }
+
+        // MARK: Public
+
+        public let underlying: any Error
+        public let logs: [JSToolLogEntry]
+
+        public var localizedDescription: String {
+            self.underlying.localizedDescription
+        }
+    }
+
+    // MARK: - JSToolLogEntry
+
+    /// One captured `console.*` line from a JS tool. Carries the
+    /// level (so the UI can colour-code), the rendered message
+    /// (space-joined arguments, with objects pre-JSON-stringified
+    /// for readability), and the timestamp the entry was buffered.
+    public struct JSToolLogEntry: Sendable, Hashable {
+        // MARK: Lifecycle
+
+        public init(level: Level, message: String, timestamp: Date) {
+            self.level = level
+            self.message = message
+            self.timestamp = timestamp
+        }
+
+        // MARK: Public
+
+        public enum Level: String, Sendable, Codable, CaseIterable {
+            case log, info, warn, error
+        }
+
+        public let level: Level
+        public let message: String
+        public let timestamp: Date
     }
 #endif

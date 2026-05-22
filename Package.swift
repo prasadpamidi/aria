@@ -46,6 +46,16 @@ let package = Package(
         // state machine. Apps that want on-device higher-quality TTS
         // add `AriaVoiceKokoro` from the `./Voice/` sibling package.
         .library(name: "AriaVoice", targets: ["AriaVoice"]),
+
+        // Workflow runtime — Codable workflow model + GRDB
+        // persistence + compile-to-`Aria.StateGraph` engine + the
+        // `CapabilityBroker` that mediates native + JS capability
+        // calls. Apple-only because the native capabilities
+        // (Secrets, HealthKit, EventKit, CoreLocation, Files) lean
+        // on iOS frameworks; the cross-platform pieces use
+        // `#if canImport(…)` guards so the target compiles empty
+        // on Linux.
+        .library(name: "WorkflowKit", targets: ["WorkflowKit"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
@@ -136,6 +146,29 @@ let package = Package(
             path: "Sources/AriaVoice"
         ),
 
+        // Workflow runtime. Depends on the existing Aria core (for
+        // `StateGraph`, `Agent`, `JSONValue`) plus AriaTools +
+        // AriaToolsJS for the JS bridge surface. Native-capability
+        // code paths (HealthKit / EventKit / CoreLocation /
+        // PDFKit / LocalAuthentication / Security framework) are
+        // `#if canImport(...)`-guarded so the target compiles on
+        // Linux as an empty shell.
+        .target(
+            name: "WorkflowKit",
+            dependencies: [
+                "Aria",
+                "AriaTools",
+                "AriaToolsJS",
+                // GRDB powers the on-disk workflow store. Apple-only,
+                // so the `Storage/` subfolder is wrapped in
+                // `#if canImport(GRDB)` and the target compiles empty
+                // on Linux. Same dep AriaApple already uses; SPM
+                // resolves a single GRDB instance for the package.
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ],
+            path: "Sources/WorkflowKit"
+        ),
+
         // MARK: - Test targets
 
         .testTarget(
@@ -160,6 +193,12 @@ let package = Package(
             name: "AriaToolsJSTests",
             dependencies: ["Aria", "AriaTools", "AriaToolsJS", "AriaTesting"],
             path: "Tests/AriaToolsJSTests"
+        ),
+
+        .testTarget(
+            name: "WorkflowKitTests",
+            dependencies: ["WorkflowKit", "Aria", "AriaTesting"],
+            path: "Tests/WorkflowKitTests"
         ),
 
         // MARK: - Apps
