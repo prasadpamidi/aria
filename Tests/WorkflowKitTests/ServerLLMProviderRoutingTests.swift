@@ -137,7 +137,16 @@ struct ServerLLMProviderRoutingTests {
         resolver: ServerLLMProviderResolver?
     ) async throws -> WorkflowRunner {
         let broker = CapabilityBroker()
-        let evaluator = try JavaScriptCoreJSEvaluator()
+        // The routing tests don't actually execute any JS — every
+        // workflow they build is LLM steps + outputs. Substitute
+        // `ThrowingJSEvaluator` on Linux where `JavaScriptCore`
+        // isn't available; Apple platforms still use the real
+        // evaluator so any test that DOES want JS keeps working.
+        #if canImport(JavaScriptCore)
+            let evaluator: any WorkflowJSEvaluator = try JavaScriptCoreJSEvaluator()
+        #else
+            let evaluator: any WorkflowJSEvaluator = ThrowingJSEvaluator()
+        #endif
         let compiler = WorkflowCompiler(
             broker: broker,
             llmProvider: defaultProvider,
