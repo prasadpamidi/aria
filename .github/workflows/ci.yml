@@ -157,14 +157,23 @@ jobs:
         run: |
           # Pin swiftformat to a specific version so the CI's lint
           # rules don't drift relative to the version developers
-          # install locally via Homebrew. 0.61.1 ships fixes for
-          # the `indent` + `trailingSpace` over-eager behaviour on
-          # empty lines inside multi-line string literals that
-          # 0.61.0 still flags.
+          # install locally. 0.61.1 ships fixes for the `indent` +
+          # `trailingSpace` over-eager behaviour on empty lines
+          # inside multi-line string literals that 0.61.0 still
+          # flags.
+          #
+          # Install path matters: macOS arm64 runners have
+          # /opt/homebrew/bin ahead of /usr/local/bin in PATH, so
+          # we drop the binary directly into the homebrew bin
+          # directory (uninstalling any cached version first) so
+          # `which swiftformat` and `swiftformat --version` pick
+          # up our pinned build.
           brew install swiftlint
+          brew uninstall --ignore-dependencies swiftformat 2>/dev/null || true
           curl -fsSL https://github.com/nicklockwood/SwiftFormat/releases/download/0.61.1/swiftformat.zip -o /tmp/swiftformat.zip
           unzip -q /tmp/swiftformat.zip -d /tmp/swiftformat
-          sudo install /tmp/swiftformat/swiftformat /usr/local/bin/swiftformat
+          sudo install /tmp/swiftformat/swiftformat /opt/homebrew/bin/swiftformat
+          which swiftformat
           swiftformat --version
 
       - name: Show tool versions
