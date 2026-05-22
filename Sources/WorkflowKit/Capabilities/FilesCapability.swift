@@ -77,12 +77,18 @@ public actor FilesCapability: Capability {
         _ url: URL,
         _ body: () throws -> Result
     ) throws -> Result {
-        let started = url.startAccessingSecurityScopedResource()
-        defer {
-            if started {
-                url.stopAccessingSecurityScopedResource()
+        // Security-scoped resource access is Apple-only — the
+        // UIDocumentPicker / NSOpenPanel sandboxing dance doesn't
+        // exist on Linux, so we no-op the scope-management calls
+        // there. Apple builds keep the original semantics intact.
+        #if canImport(Darwin)
+            let started = url.startAccessingSecurityScopedResource()
+            defer {
+                if started {
+                    url.stopAccessingSecurityScopedResource()
+                }
             }
-        }
+        #endif
         return try body()
     }
 
