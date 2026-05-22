@@ -141,7 +141,9 @@ public struct LLMStep: Codable, Sendable, Equatable {
         modelHint: ModelFamilyHint = .any,
         maxTokens: Int? = nil,
         serverProviderID: UUID? = nil,
-        mlxModelID: String? = nil
+        mlxModelID: String? = nil,
+        extraSkillIDs: Set<UUID> = [],
+        disabledSkillIDs: Set<UUID> = []
     ) {
         self.id = id
         self.promptTemplate = promptTemplate
@@ -151,6 +153,22 @@ public struct LLMStep: Codable, Sendable, Equatable {
         self.maxTokens = maxTokens
         self.serverProviderID = serverProviderID
         self.mlxModelID = mlxModelID
+        self.extraSkillIDs = extraSkillIDs
+        self.disabledSkillIDs = disabledSkillIDs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(UUID.self, forKey: .id)
+        self.promptTemplate = try container.decode(String.self, forKey: .promptTemplate)
+        self.outputBinding = try container.decode(String.self, forKey: .outputBinding)
+        self.structuredOutputSchema = try container.decodeIfPresent(String.self, forKey: .structuredOutputSchema)
+        self.modelHint = try container.decode(ModelFamilyHint.self, forKey: .modelHint)
+        self.maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens)
+        self.serverProviderID = try container.decodeIfPresent(UUID.self, forKey: .serverProviderID)
+        self.mlxModelID = try container.decodeIfPresent(String.self, forKey: .mlxModelID)
+        self.extraSkillIDs = try container.decodeIfPresent(Set<UUID>.self, forKey: .extraSkillIDs) ?? []
+        self.disabledSkillIDs = try container.decodeIfPresent(Set<UUID>.self, forKey: .disabledSkillIDs) ?? []
     }
 
     // MARK: Public
@@ -185,6 +203,50 @@ public struct LLMStep: Codable, Sendable, Equatable {
     /// server provider wins (the editor's picker only lets the
     /// user set one at a time).
     public let mlxModelID: String?
+
+    /// Skills to expose to this step in addition to whatever the
+    /// owning workflow's `enabledSkillIDs` declares. Empty by
+    /// default — most steps inherit the workflow-level set as-is.
+    public let extraSkillIDs: Set<UUID>
+
+    /// Skills the workflow declares but that this specific step
+    /// should NOT see. Higher precedence than the workflow set,
+    /// so a workflow that enables `meeting-notes` globally can
+    /// still hide it on a per-step basis when it's irrelevant.
+    public let disabledSkillIDs: Set<UUID>
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self.id, forKey: .id)
+        try container.encode(self.promptTemplate, forKey: .promptTemplate)
+        try container.encode(self.outputBinding, forKey: .outputBinding)
+        try container.encodeIfPresent(self.structuredOutputSchema, forKey: .structuredOutputSchema)
+        try container.encode(self.modelHint, forKey: .modelHint)
+        try container.encodeIfPresent(self.maxTokens, forKey: .maxTokens)
+        try container.encodeIfPresent(self.serverProviderID, forKey: .serverProviderID)
+        try container.encodeIfPresent(self.mlxModelID, forKey: .mlxModelID)
+        if !self.extraSkillIDs.isEmpty {
+            try container.encode(self.extraSkillIDs, forKey: .extraSkillIDs)
+        }
+        if !self.disabledSkillIDs.isEmpty {
+            try container.encode(self.disabledSkillIDs, forKey: .disabledSkillIDs)
+        }
+    }
+
+    // MARK: Private
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case promptTemplate
+        case outputBinding
+        case structuredOutputSchema
+        case modelHint
+        case maxTokens
+        case serverProviderID
+        case mlxModelID
+        case extraSkillIDs
+        case disabledSkillIDs
+    }
 }
 
 // MARK: - CapabilityStep

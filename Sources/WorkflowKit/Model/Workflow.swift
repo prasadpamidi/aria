@@ -33,7 +33,8 @@ public struct Workflow: Codable, Identifiable, Sendable, Equatable {
         updatedAt: Date = Date(),
         nodePositions: [String: NodePosition] = [:],
         parentWorkflowID: UUID? = nil,
-        timeOfDayTags: Set<TimeOfDay> = []
+        timeOfDayTags: Set<TimeOfDay> = [],
+        enabledSkillIDs: Set<UUID> = []
     ) {
         self.id = id
         self.name = name
@@ -58,6 +59,7 @@ public struct Workflow: Codable, Identifiable, Sendable, Equatable {
         self.nodePositions = nodePositions
         self.parentWorkflowID = parentWorkflowID
         self.timeOfDayTags = timeOfDayTags
+        self.enabledSkillIDs = enabledSkillIDs
     }
 
     public init(from decoder: Decoder) throws {
@@ -70,6 +72,10 @@ public struct Workflow: Codable, Identifiable, Sendable, Equatable {
         let timeTags = try container.decodeIfPresent(
             Set<TimeOfDay>.self,
             forKey: .timeOfDayTags
+        ) ?? []
+        let skillIDs = try container.decodeIfPresent(
+            Set<UUID>.self,
+            forKey: .enabledSkillIDs
         ) ?? []
         try self.init(
             id: container.decode(UUID.self, forKey: .id),
@@ -87,7 +93,8 @@ public struct Workflow: Codable, Identifiable, Sendable, Equatable {
             updatedAt: container.decode(Date.self, forKey: .updatedAt),
             nodePositions: positions,
             parentWorkflowID: parent,
-            timeOfDayTags: timeTags
+            timeOfDayTags: timeTags,
+            enabledSkillIDs: skillIDs
         )
     }
 
@@ -131,6 +138,12 @@ public struct Workflow: Codable, Identifiable, Sendable, Equatable {
     /// byte-identical to the pre-field schema.
     public var timeOfDayTags: Set<TimeOfDay>
 
+    /// Skills exposed to every LLM step in this workflow. The
+    /// compiler unions this with each step's `extraSkillIDs` and
+    /// subtracts `disabledSkillIDs`. Conditionally encoded for
+    /// forward-compat with pre-skills workflows.
+    public var enabledSkillIDs: Set<UUID>
+
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.id, forKey: .id)
@@ -155,6 +168,9 @@ public struct Workflow: Codable, Identifiable, Sendable, Equatable {
         if !self.timeOfDayTags.isEmpty {
             try container.encode(self.timeOfDayTags, forKey: .timeOfDayTags)
         }
+        if !self.enabledSkillIDs.isEmpty {
+            try container.encode(self.enabledSkillIDs, forKey: .enabledSkillIDs)
+        }
     }
 
     // MARK: Private
@@ -176,6 +192,7 @@ public struct Workflow: Codable, Identifiable, Sendable, Equatable {
         case nodePositions
         case parentWorkflowID
         case timeOfDayTags
+        case enabledSkillIDs
     }
 
     private static func roundedToMillisecond(_ date: Date) -> Date {
