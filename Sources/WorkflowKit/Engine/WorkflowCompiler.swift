@@ -30,7 +30,8 @@ public struct WorkflowCompiler: Sendable {
         pluginToolBroker: (any PluginToolBroker)? = nil,
         serverLLMResolver: ServerLLMProviderResolver? = nil,
         mlxLLMResolver: MLXLLMProviderResolver? = nil,
-        mcpCredentialResolver: MCPCredentialResolver? = nil
+        mcpCredentialResolver: MCPCredentialResolver? = nil,
+        skillResolver: WorkflowSkillResolver? = nil
     ) {
         self.broker = broker
         self.llmProvider = llmProvider
@@ -39,6 +40,7 @@ public struct WorkflowCompiler: Sendable {
         self.serverLLMResolver = serverLLMResolver
         self.mlxLLMResolver = mlxLLMResolver
         self.mcpCredentialResolver = mcpCredentialResolver
+        self.skillResolver = skillResolver
     }
 
     // MARK: Public
@@ -149,6 +151,12 @@ public struct WorkflowCompiler: Sendable {
     /// `MCPError.missingCredential`; steps with no credentialID
     /// (private-network servers) still run.
     let mcpCredentialResolver: MCPCredentialResolver?
+    /// Optional bridge to the app's `SkillProvider`. When set,
+    /// LLM steps prepend skill descriptions + bodies to their
+    /// prompt based on the workflow + step's effective skill
+    /// set. `nil` means workflow LLM steps see no skills, which
+    /// matches pre-skills behaviour.
+    let skillResolver: WorkflowSkillResolver?
 
     /// Stable, namespaced binding key for a branch's predicate
     /// outcome. Underscore-prefixed so it doesn't collide with
@@ -304,7 +312,13 @@ public struct WorkflowCompiler: Sendable {
     ) {
         switch node {
         case let .llm(step):
-            self.addLLMNode(step: step, name: name, graph: &graph, sink: context.eventSink)
+            self.addLLMNode(
+                step: step,
+                workflow: context.workflow,
+                name: name,
+                graph: &graph,
+                sink: context.eventSink
+            )
         case let .capability(step):
             self.addCapabilityNode(
                 step: step,

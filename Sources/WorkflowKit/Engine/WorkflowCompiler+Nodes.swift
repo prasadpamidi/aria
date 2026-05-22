@@ -9,8 +9,10 @@ import Foundation
 /// every method here is fileprivate to the compiler's lowering
 /// path and isn't part of the public surface.
 extension WorkflowCompiler {
+    // swiftlint:disable:next function_parameter_count
     func addLLMNode(
         step: LLMStep,
+        workflow: Workflow,
         name: String,
         graph: inout StateGraph<WorkflowState>,
         sink: (any WorkflowEventSink)?
@@ -18,12 +20,19 @@ extension WorkflowCompiler {
         let defaultProvider = self.llmProvider
         let serverResolver = self.serverLLMResolver
         let mlxResolver = self.mlxLLMResolver
+        let skillResolver = self.skillResolver
+        let skillIDs = WorkflowSkillSet.effective(workflow: workflow, step: step)
         graph.addNode(name, WorkflowCompiler.instrument(
             nodeID: step.id,
             outputBinding: step.outputBinding,
             sink: sink
         ) { state in
-            let prompt = TemplateInterpolator.render(step.promptTemplate, bindings: state.bindings)
+            let rendered = TemplateInterpolator.render(step.promptTemplate, bindings: state.bindings)
+            let prompt = await WorkflowCompiler.augmentPromptWithSkills(
+                rendered,
+                skillIDs: skillIDs,
+                resolver: skillResolver
+            )
             let provider = await WorkflowCompiler.resolveLLMProvider(
                 for: step,
                 default: defaultProvider,
@@ -40,6 +49,26 @@ extension WorkflowCompiler {
             next.bindings[step.outputBinding] = .string(text)
             return next
         })
+    }
+
+    /// Prepend the resolved skill block to the step's rendered
+    /// prompt. Workflow LLM steps are single-shot — there's no
+    /// tool loop and no `load_skill` path — so every requested
+    /// skill (whether `alwaysInline` or not) is inlined directly
+    /// into the prompt.
+    static func augmentPromptWithSkills(
+        _ prompt: String,
+        skillIDs: Set<UUID>,
+        resolver: WorkflowSkillResolver?
+    ) async -> String {
+        guard let resolver, !skillIDs.isEmpty else {
+            return prompt
+        }
+        let block = await resolver(skillIDs)
+        if block.text.isEmpty {
+            return prompt
+        }
+        return "\(block.text)\n\n\(prompt)"
     }
 
     /// Fire the provider's optional warm-up hook. Errors are
