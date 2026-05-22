@@ -28,6 +28,34 @@ public enum CapabilityID: String, Codable, CaseIterable, Sendable {
     /// `HTTPTool`. Listed here so the broker can mediate manifest
     /// declarations alongside the native caps.
     case http
+    /// System clipboard (`UIPasteboard`) read + write. Powers
+    /// the "paste your X, get Y" class of workflows (tone
+    /// adjuster, email drafter, receipt to pantry, etc.). iOS
+    /// 14+ shows a clipboard-access toast on every read; no
+    /// extra Info.plist key required.
+    case clipboard
+    /// System share sheet (`UIActivityViewController`). Lets a
+    /// workflow hand its final output to whatever destination
+    /// the user picks (Mail, Messages, Notes, …). Requires an
+    /// interactive context — calls from background Shortcuts /
+    /// Siri / AppIntent contexts surface `.unavailable`.
+    case share
+    /// Local notification scheduling via
+    /// `UNUserNotificationCenter`. Powers reminders like the
+    /// Hydration Coach, Bill Tracker, and Sleep Wind-Down
+    /// workflows. Works in background contexts (Shortcuts /
+    /// Siri / AppIntent) since scheduling doesn't need a
+    /// foreground window.
+    case notifications
+    /// iOS Focus state read + suggest. Read-only —
+    /// Apple intentionally doesn't expose programmatic
+    /// *write* to Focus mode; we surface a "suggest switch"
+    /// affordance that drops the user into the system picker.
+    case focus
+    /// Run a named iOS Shortcut from a workflow step via the
+    /// Shortcuts `x-callback-url` scheme. Lets workflows
+    /// chain into user-authored Shortcuts as side effects.
+    case shortcuts
 }
 
 // MARK: - Trigger
@@ -63,6 +91,43 @@ public enum ModelFamilyHint: String, Codable, Sendable {
     case gemma
     /// "Whatever's available" — picks the active default.
     case any
+}
+
+// MARK: - TimeOfDay
+
+/// Coarse-grained "when is this workflow most useful" tag used
+/// by Home's "Suggested for now" rail. Each workflow can carry
+/// any subset; the suggester picks workflows whose tags match
+/// the current local-time bucket. Workflows with no tags fall
+/// back to `.anytime` semantics — eligible at any bucket but
+/// outranked by an explicit match.
+///
+/// The buckets intentionally mirror the greeting-hero
+/// thresholds in HomeScreen (morning = 5-12, afternoon = 12-17,
+/// evening = 17-22, otherwise night) so a 7 a.m. user sees the
+/// "Good morning" greeting AND the morning-tagged workflows in
+/// the same render.
+public enum TimeOfDay: String, Codable, CaseIterable, Sendable {
+    case morning
+    case afternoon
+    case evening
+    case night
+    case anytime
+
+    // MARK: Public
+
+    /// Map an absolute `Date` to the bucket Home should query
+    /// against. Single source of truth so the greeting and the
+    /// suggester never drift.
+    public static func bucket(for date: Date, calendar: Calendar = .current) -> TimeOfDay {
+        let hour = calendar.component(.hour, from: date)
+        return switch hour {
+        case 5..<12: .morning
+        case 12..<17: .afternoon
+        case 17..<22: .evening
+        default: .night
+        }
+    }
 }
 
 // MARK: - InputField
@@ -109,6 +174,84 @@ public struct InputSchema: Codable, Sendable, Equatable {
     // MARK: Public
 
     public let fields: [InputField]
+}
+
+// MARK: - OutputRenderMode
+
+/// How an output field should be presented in the workflow's
+/// run-result panel. Stored per-field on `OutputStep.renderModes`
+/// so the same workflow can have one field surface as readable
+/// markdown, another as code, and another as spoken voice.
+///
+/// `.plain` is the default and what every existing workflow
+/// decodes as when no explicit hint is stored. Renderers fall
+/// back to plain when they hit a value they can't natively
+/// represent (e.g. requesting markdown on a JSON array).
+public enum OutputRenderMode: Codable, Sendable, Equatable, Hashable {
+    /// Default — monospaced text, copy-selectable. What every
+    /// pre-render-mode workflow gets at decode time.
+    case plain
+    /// Rich markdown. Uses the same `Markdown` rendering the
+    /// chat surface uses (headings, lists, fenced code blocks,
+    /// links). Best for prose-heavy outputs (summaries,
+    /// emails, briefs).
+    case markdown
+    /// Code listing in a monospaced block. The optional
+    /// `language` hint drives syntax-highlighting today's
+    /// renderer doesn't apply (room for follow-up), but the
+    /// value is captured so a later upgrade can wire it
+    /// through without a schema migration. Examples: `"swift"`,
+    /// `"python"`, `"json"`.
+    case code(language: String?)
+    /// Read aloud via the system TTS provider. The renderer
+    /// shows a play/stop control instead of the text body; the
+    /// text is still copy-selectable behind a disclosure for
+    /// accessibility.
+    case voice
+
+    // MARK: Public
+
+    /// Every choice the picker should offer, in display order.
+    /// `.code` defaults its language to `nil` (auto / no hint).
+    public static let allPickerCases: [OutputRenderMode] = [
+        .plain,
+        .markdown,
+        .code(language: nil),
+        .voice,
+    ]
+
+    /// Stable string id used by the editor's picker. Decoupled
+    /// from `rawValue` because the enum has an associated value
+    /// (so it can't be `RawRepresentable`); a separate
+    /// switchable id keeps the picker bindings simple.
+    public var pickerID: String {
+        switch self {
+        case .plain: "plain"
+        case .markdown: "markdown"
+        case .code: "code"
+        case .voice: "voice"
+        }
+    }
+
+    /// User-facing label for the picker. Localisable later if
+    /// the catalogue ever ships in non-English locales.
+    public var displayName: String {
+        switch self {
+        case .plain: "Plain text"
+        case .markdown: "Markdown"
+        case .code: "Code"
+        case .voice: "Voice"
+        }
+    }
+
+    public var systemImage: String {
+        switch self {
+        case .plain: "doc.plaintext"
+        case .markdown: "doc.richtext"
+        case .code: "chevron.left.forwardslash.chevron.right"
+        case .voice: "speaker.wave.2.fill"
+        }
+    }
 }
 
 // MARK: - OutputField

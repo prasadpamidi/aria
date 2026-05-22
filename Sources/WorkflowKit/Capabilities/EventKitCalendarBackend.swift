@@ -45,6 +45,53 @@
                 .sorted { $0.start < $1.start }
         }
 
+        public func createEvent(
+            title: String,
+            start: Date,
+            end: Date,
+            notes: String?,
+            calendarName: String?,
+            isAllDay: Bool
+        ) async throws -> CalendarEvent {
+            let event = EKEvent(eventStore: self.store)
+            event.title = title
+            event.startDate = start
+            event.endDate = end
+            event.notes = notes
+            event.isAllDay = isAllDay
+            event.calendar = self.eventsCalendar(named: calendarName)
+            do {
+                try self.store.save(event, span: .thisEvent, commit: true)
+            } catch {
+                throw EventKitAccessError.writeFailed(String(describing: error))
+            }
+            return Self.mapEvent(event)
+        }
+
+        public func createReminder(
+            title: String,
+            dueDate: Date?,
+            notes: String?,
+            listName: String?
+        ) async throws -> CalendarReminder {
+            let reminder = EKReminder(eventStore: self.store)
+            reminder.title = title
+            reminder.notes = notes
+            reminder.calendar = self.remindersCalendar(named: listName)
+            if let dueDate {
+                reminder.dueDateComponents = Calendar.current.dateComponents(
+                    [.year, .month, .day, .hour, .minute],
+                    from: dueDate
+                )
+            }
+            do {
+                try self.store.save(reminder, commit: true)
+            } catch {
+                throw EventKitAccessError.writeFailed(String(describing: error))
+            }
+            return Self.mapReminder(reminder)
+        }
+
         public func upcomingReminders(limit: Int) async throws -> [CalendarReminder] {
             let predicate = self.store.predicateForIncompleteReminders(
                 withDueDateStarting: nil,
@@ -98,6 +145,39 @@
             )
         }
 
+        /// Resolve which calendar to write a new event into.
+        /// `nil` → default events calendar. A named match looks
+        /// for a writable calendar whose title equals
+        /// `calendarName` (case-insensitive). Falls back to the
+        /// default if the name doesn't resolve — better to write
+        /// to a known-good calendar than silently drop the event.
+        private func eventsCalendar(named calendarName: String?) -> EKCalendar? {
+            if let calendarName, !calendarName.isEmpty {
+                let match = self.store
+                    .calendars(for: .event)
+                    .first {
+                        $0.allowsContentModifications && $0.title.caseInsensitiveCompare(calendarName) == .orderedSame
+                    }
+                if let match {
+                    return match
+                }
+            }
+            return self.store.defaultCalendarForNewEvents
+        }
+
+        private func remindersCalendar(named listName: String?) -> EKCalendar? {
+            if let listName, !listName.isEmpty {
+                let match = self.store
+                    .calendars(for: .reminder)
+                    .first { $0.allowsContentModifications && $0.title.caseInsensitiveCompare(listName) == .orderedSame
+                    }
+                if let match {
+                    return match
+                }
+            }
+            return self.store.defaultCalendarForNewReminders()
+        }
+
         /// EventKit's iOS 17+ `requestFullAccessToEvents` is
         /// completion-handler based. Wrapped here so the public
         /// `requestAccess()` can `await` it.
@@ -132,8 +212,22 @@
 
     // MARK: - EventKitAccessError
 
-    public enum EventKitAccessError: Error, Sendable, Equatable {
+    public enum EventKitAccessError: LocalizedError, Sendable, Equatable {
         case calendarDenied
         case remindersDenied
+        case writeFailed(String)
+
+        // MARK: Public
+
+        public var errorDescription: String? {
+            switch self {
+            case .calendarDenied:
+                "Avyra wasn't granted access to your Calendar."
+            case .remindersDenied:
+                "Avyra wasn't granted access to your Reminders."
+            case let .writeFailed(detail):
+                "Couldn't save to your calendar / reminders: \(detail)"
+            }
+        }
     }
 #endif

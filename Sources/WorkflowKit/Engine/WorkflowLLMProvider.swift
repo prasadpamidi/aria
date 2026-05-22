@@ -19,6 +19,25 @@ public protocol WorkflowLLMProvider: Sendable {
         hint: ModelFamilyHint,
         maxTokens: Int?
     ) async throws -> String
+
+    /// Optional warm-up hook fired right before `generate` in the
+    /// LLM step's executor. On-device backends (FoundationModels,
+    /// MLX) override this to load weights into memory so the first
+    /// real call doesn't pay cold start; HTTP-backed server
+    /// providers inherit the no-op default since their request is
+    /// stateless. Errors here are advisory — the engine logs and
+    /// continues to `generate`, where the real failure (if any)
+    /// surfaces with the user-actionable diagnostic.
+    func prewarm() async throws
+}
+
+extension WorkflowLLMProvider {
+    /// Default no-op so adopters opt in to warmup only when they
+    /// have actual state to prepare. Keeps the OpenAI / Anthropic /
+    /// Gemini clients clean (their request shape needs nothing
+    /// loaded) and existing fakes / stubs don't have to acknowledge
+    /// the hook.
+    public func prewarm() async throws { }
 }
 
 // MARK: - WorkflowJSEvaluator

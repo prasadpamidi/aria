@@ -217,6 +217,132 @@ struct CalendarRemindersCapabilityTests {
         }
     }
 
+    // MARK: - createEvent
+
+    @Test
+    func createEventPersistsThroughBackend() async throws {
+        let backend = InMemoryCalendarBackend()
+        let capability = CalendarRemindersCapability(backend: backend)
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let end = start.addingTimeInterval(1800)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+
+        let result = try await capability.call(
+            method: "createEvent",
+            arguments: [
+                "title": .string("Standup"),
+                "start": .string(formatter.string(from: start)),
+                "end": .string(formatter.string(from: end)),
+                "notes": .string("Daily team check-in"),
+                "calendar": .string("Work"),
+            ],
+            context: Self.context()
+        )
+
+        guard case let .object(dict) = result else {
+            Issue.record("Expected object result")
+            return
+        }
+        #expect(dict["title"] == .string("Standup"))
+        #expect(dict["calendar"] == .string("Work"))
+        #expect(dict["notes"] == .string("Daily team check-in"))
+
+        // Round-trip — the freshly-saved event must show up via
+        // `eventsBetween` covering its window.
+        let readBack = try await capability.call(
+            method: "eventsBetween",
+            arguments: [
+                "start": .string(formatter.string(from: start.addingTimeInterval(-60))),
+                "end": .string(formatter.string(from: end.addingTimeInterval(60))),
+            ],
+            context: Self.context()
+        )
+        let titles = Self.titles(from: readBack)
+        #expect(titles.contains("Standup"))
+    }
+
+    @Test
+    func createEventRejectsInvalidWindow() async throws {
+        let backend = InMemoryCalendarBackend()
+        let capability = CalendarRemindersCapability(backend: backend)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        let now = Date()
+        let earlier = now.addingTimeInterval(-3600)
+        // start > end should fail closed rather than silently
+        // create a backwards event.
+        await #expect(throws: CapabilityError.self) {
+            try await capability.call(
+                method: "createEvent",
+                arguments: [
+                    "title": .string("Backwards"),
+                    "start": .string(formatter.string(from: now)),
+                    "end": .string(formatter.string(from: earlier)),
+                ],
+                context: Self.context()
+            )
+        }
+    }
+
+    // MARK: - createReminder
+
+    @Test
+    func createReminderPersistsThroughBackend() async throws {
+        let backend = InMemoryCalendarBackend()
+        let capability = CalendarRemindersCapability(backend: backend)
+        let due = Date(timeIntervalSince1970: 1_800_005_000)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+
+        let result = try await capability.call(
+            method: "createReminder",
+            arguments: [
+                "title": .string("Buy milk"),
+                "dueDate": .string(formatter.string(from: due)),
+                "list": .string("Groceries"),
+            ],
+            context: Self.context()
+        )
+
+        guard case let .object(dict) = result else {
+            Issue.record("Expected object result")
+            return
+        }
+        #expect(dict["title"] == .string("Buy milk"))
+        #expect(dict["list"] == .string("Groceries"))
+
+        // Round-trip — the new reminder appears in upcoming.
+        let upcoming = try await capability.call(
+            method: "upcomingReminders",
+            arguments: [:],
+            context: Self.context()
+        )
+        let titles = Self.titles(from: upcoming)
+        #expect(titles.contains("Buy milk"))
+    }
+
+    @Test
+    func createReminderWithoutDueDateSucceeds() async throws {
+        // dueDate is optional — reminders without one are still
+        // valid (they appear in lists without time-based alerts).
+        let backend = InMemoryCalendarBackend()
+        let capability = CalendarRemindersCapability(backend: backend)
+        let result = try await capability.call(
+            method: "createReminder",
+            arguments: [
+                "title": .string("Someday list item"),
+            ],
+            context: Self.context()
+        )
+        guard case let .object(dict) = result else {
+            Issue.record("Expected object result")
+            return
+        }
+        #expect(dict["title"] == .string("Someday list item"))
+        #expect(dict["dueDate"] == nil)
+    }
+
     // MARK: Private
 
     /// Mixed-window event fixture used by the "today" filter

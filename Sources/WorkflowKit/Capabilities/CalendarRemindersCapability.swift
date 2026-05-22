@@ -8,7 +8,7 @@ import Foundation
 /// `InMemoryCalendarBackend` so the test runner never needs
 /// EventKit authorization.
 ///
-/// Three methods:
+/// Five methods:
 ///
 ///   * `eventsToday()` — events whose window overlaps the user's
 ///     local "today" (midnight-to-midnight). The common Daily
@@ -17,6 +17,11 @@ import Foundation
 ///   * `upcomingReminders(limit)` — incomplete reminders sorted
 ///     by due date (no-due-date sorts last). Limit defaults to
 ///     5; cap at 50 to avoid pathological returns.
+///   * `createEvent(title, start, end, …)` — write a new event
+///     to the user's default events calendar (or a named one).
+///   * `createReminder(title, dueDate?, …)` — write a new
+///     reminder to the user's default reminders list (or a
+///     named one).
 ///
 /// First-use authorization: the capability calls
 /// `backend.requestAccess()` lazily before its first read so the
@@ -55,6 +60,10 @@ public actor CalendarRemindersCapability: Capability {
             return try await self.handleEventsBetween(arguments: arguments)
         case "upcomingReminders":
             return try await self.handleUpcomingReminders(arguments: arguments)
+        case "createEvent":
+            return try await self.handleCreateEvent(arguments: arguments)
+        case "createReminder":
+            return try await self.handleCreateReminder(arguments: arguments)
         default:
             throw CapabilityError.unknownMethod(capability: .calendar, method: method)
         }
@@ -66,6 +75,8 @@ public actor CalendarRemindersCapability: Capability {
         "eventsToday",
         "eventsBetween",
         "upcomingReminders",
+        "createEvent",
+        "createReminder",
     ]
 
     /// Default reminder fetch limit when the caller doesn't pass
@@ -177,6 +188,26 @@ public actor CalendarRemindersCapability: Capability {
         }
     }
 
+    private static func optionalStringArg(
+        _ key: String,
+        from arguments: [String: JSONValue]
+    ) -> String? {
+        guard case let .string(value) = arguments[key], !value.isEmpty else {
+            return nil
+        }
+        return value
+    }
+
+    private static func optionalBoolArg(
+        _ key: String,
+        from arguments: [String: JSONValue]
+    ) -> Bool {
+        if case let .bool(value) = arguments[key] {
+            return value
+        }
+        return false
+    }
+
     /// One-shot per actor lifetime. Subsequent calls return
     /// immediately — re-asking the system every time is both
     /// noisy and pointless once the user has answered.
@@ -219,5 +250,58 @@ public actor CalendarRemindersCapability: Capability {
         let clamped = max(1, min(limit, Self.maxReminderLimit))
         let reminders = try await self.backend.upcomingReminders(limit: clamped)
         return .array(reminders.map(Self.encodeReminder))
+    }
+
+    private func handleCreateEvent(arguments: [String: JSONValue]) async throws -> JSONValue {
+        let title = try Self.requireStringArg("title", from: arguments, method: "createEvent")
+        let startISO = try Self.requireStringArg("start", from: arguments, method: "createEvent")
+        let endISO = try Self.requireStringArg("end", from: arguments, method: "createEvent")
+        guard let start = Self.parseISO8601(startISO),
+              let end = Self.parseISO8601(endISO),
+              start < end else {
+            throw CapabilityError.invalidArguments(
+                method: "createEvent",
+                expected: "ISO-8601 start + end with start < end",
+                actual: "start=\(startISO), end=\(endISO)"
+            )
+        }
+        let notes = Self.optionalStringArg("notes", from: arguments)
+        let calendarName = Self.optionalStringArg("calendar", from: arguments)
+        let isAllDay = Self.optionalBoolArg("isAllDay", from: arguments)
+        let created = try await self.backend.createEvent(
+            title: title,
+            start: start,
+            end: end,
+            notes: notes,
+            calendarName: calendarName,
+            isAllDay: isAllDay
+        )
+        return Self.encodeEvent(created)
+    }
+
+    private func handleCreateReminder(arguments: [String: JSONValue]) async throws -> JSONValue {
+        let title = try Self.requireStringArg("title", from: arguments, method: "createReminder")
+        let dueDate: Date?
+        if let dueISO = Self.optionalStringArg("dueDate", from: arguments) {
+            guard let parsed = Self.parseISO8601(dueISO) else {
+                throw CapabilityError.invalidArguments(
+                    method: "createReminder",
+                    expected: "ISO-8601 dueDate (or omit for no due date)",
+                    actual: dueISO
+                )
+            }
+            dueDate = parsed
+        } else {
+            dueDate = nil
+        }
+        let notes = Self.optionalStringArg("notes", from: arguments)
+        let listName = Self.optionalStringArg("list", from: arguments)
+        let created = try await self.backend.createReminder(
+            title: title,
+            dueDate: dueDate,
+            notes: notes,
+            listName: listName
+        )
+        return Self.encodeReminder(created)
     }
 }

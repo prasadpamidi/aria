@@ -20,6 +20,31 @@ public protocol CalendarBackend: Sendable {
     /// (no due date sorts last). `nil` for any reminder field
     /// the backend doesn't know about.
     func upcomingReminders(limit: Int) async throws -> [CalendarReminder]
+
+    /// Create a new event. When `calendarName` is `nil`, the
+    /// backend writes to the user's default events calendar.
+    /// Returns the persisted event so the caller can echo back
+    /// (start/end may be normalised — EventKit drops sub-second
+    /// precision; we surface what was actually stored).
+    func createEvent(
+        title: String,
+        start: Date,
+        end: Date,
+        notes: String?,
+        calendarName: String?,
+        isAllDay: Bool
+    ) async throws -> CalendarEvent
+
+    /// Create a new reminder. When `listName` is `nil`, writes
+    /// to the user's default reminders list. `dueDate` is
+    /// optional — reminders without one show in EventKit but
+    /// don't trigger time-based alerts.
+    func createReminder(
+        title: String,
+        dueDate: Date?,
+        notes: String?,
+        listName: String?
+    ) async throws -> CalendarReminder
 }
 
 // MARK: - CalendarEvent
@@ -87,9 +112,13 @@ public struct CalendarReminder: Sendable, Equatable {
 // MARK: - InMemoryCalendarBackend
 
 /// Test-only deterministic backend. Set fixtures via the
-/// initialiser; reads are synchronous reads from the captured
-/// state. Thread-safe by construction (immutable).
-public struct InMemoryCalendarBackend: CalendarBackend {
+/// initialiser; mutating methods (`createEvent` / `createReminder`)
+/// append to the internal state so tests can exercise the full
+/// read-write cycle without EventKit. Implemented as an `actor`
+/// because the backend now holds mutable state and the protocol
+/// is `Sendable` — the actor serialisation gives us thread-safe
+/// writes without explicit locking.
+public actor InMemoryCalendarBackend: CalendarBackend {
     // MARK: Lifecycle
 
     public init(
@@ -97,8 +126,8 @@ public struct InMemoryCalendarBackend: CalendarBackend {
         reminders: [CalendarReminder] = [],
         authorizationError: (any Error)? = nil
     ) {
-        self.eventsFixture = events
-        self.remindersFixture = reminders
+        self.events = events
+        self.reminders = reminders
         self.authorizationError = authorizationError
     }
 
@@ -107,13 +136,13 @@ public struct InMemoryCalendarBackend: CalendarBackend {
     // MARK: CalendarBackend
 
     public func requestAccess() async throws {
-        if let error = authorizationError {
+        if let error = self.authorizationError {
             throw error
         }
     }
 
     public func events(start: Date, end: Date) async throws -> [CalendarEvent] {
-        self.eventsFixture
+        self.events
             .filter { event in
                 event.start < end && event.end > start
             }
@@ -121,7 +150,7 @@ public struct InMemoryCalendarBackend: CalendarBackend {
     }
 
     public func upcomingReminders(limit: Int) async throws -> [CalendarReminder] {
-        let pending = self.remindersFixture.filter { !$0.isCompleted }
+        let pending = self.reminders.filter { !$0.isCompleted }
         let sorted = pending.sorted { lhs, rhs in
             switch (lhs.dueDate, rhs.dueDate) {
             case let (left?, right?): left < right
@@ -133,9 +162,54 @@ public struct InMemoryCalendarBackend: CalendarBackend {
         return Array(sorted.prefix(limit))
     }
 
+    public func createEvent(
+        title: String,
+        start: Date,
+        end: Date,
+        notes: String?,
+        calendarName: String?,
+        isAllDay: Bool
+    ) async throws -> CalendarEvent {
+        let event = CalendarEvent(
+            title: title,
+            start: start,
+            end: end,
+            location: nil,
+            notes: notes,
+            calendar: calendarName,
+            isAllDay: isAllDay
+        )
+        self.events.append(event)
+        return event
+    }
+
+    public func createReminder(
+        title: String,
+        dueDate: Date?,
+        notes _: String?,
+        listName: String?
+    ) async throws -> CalendarReminder {
+        // `CalendarReminder` doesn't carry notes today; we accept
+        // the arg for protocol parity and drop it. EventKit
+        // backend persists notes against the EKReminder; if a
+        // future workflow wants to read them back, extend the
+        // `CalendarReminder` struct.
+        let reminder = CalendarReminder(
+            title: title,
+            dueDate: dueDate,
+            isCompleted: false,
+            list: listName
+        )
+        self.reminders.append(reminder)
+        return reminder
+    }
+
     // MARK: Private
 
-    private let eventsFixture: [CalendarEvent]
-    private let remindersFixture: [CalendarReminder]
+    /// Mutable now (was `let` when the backend was a struct).
+    /// Actor isolation serialises all access — no explicit lock
+    /// needed.
+    private var events: [CalendarEvent]
+    private var reminders: [CalendarReminder]
     private let authorizationError: (any Error)?
 }

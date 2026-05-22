@@ -55,3 +55,4 @@ Icon
 
 # Local git worktrees (Claude / superpowers convention)
 .worktrees/
+Vendor/

@@ -22,14 +22,23 @@ import Foundation
 public struct WorkflowCompiler: Sendable {
     // MARK: Lifecycle
 
+    // swiftlint:disable:next function_parameter_count
     public init(
         broker: CapabilityBroker,
         llmProvider: any WorkflowLLMProvider,
-        jsEvaluator: any WorkflowJSEvaluator = ThrowingJSEvaluator()
+        jsEvaluator: any WorkflowJSEvaluator = ThrowingJSEvaluator(),
+        pluginToolBroker: (any PluginToolBroker)? = nil,
+        serverLLMResolver: ServerLLMProviderResolver? = nil,
+        mlxLLMResolver: MLXLLMProviderResolver? = nil,
+        mcpCredentialResolver: MCPCredentialResolver? = nil
     ) {
         self.broker = broker
         self.llmProvider = llmProvider
         self.jsEvaluator = jsEvaluator
+        self.pluginToolBroker = pluginToolBroker
+        self.serverLLMResolver = serverLLMResolver
+        self.mlxLLMResolver = mlxLLMResolver
+        self.mcpCredentialResolver = mcpCredentialResolver
     }
 
     // MARK: Public
@@ -41,7 +50,8 @@ public struct WorkflowCompiler: Sendable {
     public func compile(
         _ workflow: Workflow,
         callerPluginID: String,
-        attended: Bool = true
+        attended: Bool = true,
+        eventSink: (any WorkflowEventSink)? = nil
     ) throws -> CompiledStateGraph<WorkflowState> {
         guard !workflow.nodes.isEmpty else {
             throw StateGraphError.invalidGraph("Workflow has no nodes")
@@ -49,18 +59,36 @@ public struct WorkflowCompiler: Sendable {
 
         var graph = StateGraph<WorkflowState>()
         let names = workflow.nodes.map(\.id.uuidString)
+        let loopBodyNodeIDs = Self.computeLoopBodyNodeIDs(workflow: workflow)
         let context = EmissionContext(
             workflow: workflow,
             names: names,
             callerPluginID: callerPluginID,
             attended: attended,
-            branchExitOverrides: Self.computeBranchExitOverrides(workflow: workflow)
+            branchExitOverrides: Self.computeBranchExitOverrides(workflow: workflow),
+            loopBodyNodeIDs: loopBodyNodeIDs,
+            eventSink: eventSink
         )
 
         for (index, node) in workflow.nodes.enumerated() {
+            // Loop-body nodes don't emit their own state-graph
+            // nodes — they execute inline inside the parent
+            // loop's executor. Skipping them here keeps the
+            // graph DAG-shaped (no cycles back to the loop's
+            // entry) while preserving the bodies' positions
+            // in the source workflow for the editor's sake.
+            if context.loopBodyNodeIDs.contains(names[index]) {
+                continue
+            }
             self.emit(node: node, index: index, context: context, graph: &graph)
         }
-        graph.setEntry(names[0])
+        guard let entry = Self.firstNonBodyNodeName(
+            names: names,
+            loopBodyNodeIDs: loopBodyNodeIDs
+        ) else {
+            throw StateGraphError.invalidGraph("Workflow has only loop-body nodes")
+        }
+        graph.setEntry(entry)
         return try graph.build()
     }
 
@@ -81,6 +109,18 @@ public struct WorkflowCompiler: Sendable {
         /// Computed once at `compile` time; consumed by `emit`'s
         /// linear-default path.
         let branchExitOverrides: [String: String]
+        /// Node-id-strings that belong to a `LoopStep.body`. These
+        /// don't get their own state-graph nodes; the loop's
+        /// executor runs them inline. The next-linear edge logic
+        /// must skip past them when finding the successor of a
+        /// non-body node.
+        let loopBodyNodeIDs: Set<String>
+        /// Optional sink for per-step lifecycle events. When non-
+        /// nil, every instrumented `add*Node` wraps its closure
+        /// so the UI can render live progress. Default (nil)
+        /// keeps the engine zero-overhead for non-streaming
+        /// callers (AppIntent, URL scheme, programmatic runs).
+        let eventSink: (any WorkflowEventSink)?
     }
 
     /// Visible to the per-node extension in
@@ -90,6 +130,25 @@ public struct WorkflowCompiler: Sendable {
     let broker: CapabilityBroker
     let llmProvider: any WorkflowLLMProvider
     let jsEvaluator: any WorkflowJSEvaluator
+    let pluginToolBroker: (any PluginToolBroker)?
+    /// Optional bridge to the app's `ServerProviderStore` +
+    /// `CredentialStore`. When set, LLM steps whose
+    /// `serverProviderID` resolves return a configured HTTP
+    /// client; otherwise the step falls back to `llmProvider`.
+    let serverLLMResolver: ServerLLMProviderResolver?
+    /// Optional bridge to the app's `MLXModelManager`. When set,
+    /// LLM steps whose `mlxModelID` names a downloaded MLX model
+    /// run against an `AriaMLX`-backed adapter; otherwise the step
+    /// falls back to `llmProvider`. Lower precedence than
+    /// `serverLLMResolver` — server providers win when both are
+    /// set on the same step.
+    let mlxLLMResolver: MLXLLMProviderResolver?
+    /// Optional bridge to the app's `CredentialStore` for MCP
+    /// tool steps. When `nil`, MCP steps that name a
+    /// `credentialID` fail closed with
+    /// `MCPError.missingCredential`; steps with no credentialID
+    /// (private-network servers) still run.
+    let mcpCredentialResolver: MCPCredentialResolver?
 
     /// Stable, namespaced binding key for a branch's predicate
     /// outcome. Underscore-prefixed so it doesn't collide with
@@ -97,6 +156,41 @@ public struct WorkflowCompiler: Sendable {
     /// an underscore in practice — they're surface API).
     static func branchResultBindingKey(branchID: UUID) -> String {
         "__branch.\(branchID.uuidString)"
+    }
+
+    // MARK: - Instrumentation
+
+    /// Wrap a node closure with `WorkflowRunEvent` emission.
+    /// Each instrumented step bookends its work with
+    /// `stepStarted` / `stepCompleted` (or `stepFailed`); the
+    /// completed event carries the value the step landed under
+    /// `outputBinding` so the run UI can render it without
+    /// walking the bindings map itself.
+    static func instrument(
+        nodeID: UUID,
+        outputBinding: String?,
+        sink: (any WorkflowEventSink)?,
+        work: @escaping @Sendable (WorkflowState) async throws -> WorkflowState
+    ) -> @Sendable (WorkflowState) async throws -> WorkflowState {
+        { state in
+            await sink?.emit(.stepStarted(nodeID: nodeID))
+            do {
+                let next = try await work(state)
+                let value = outputBinding.flatMap { next.bindings[$0] }
+                await sink?.emit(.stepCompleted(
+                    nodeID: nodeID,
+                    outputBinding: outputBinding,
+                    value: value
+                ))
+                return next
+            } catch {
+                await sink?.emit(.stepFailed(
+                    nodeID: nodeID,
+                    error: error.localizedDescription
+                ))
+                throw error
+            }
+        }
     }
 
     // MARK: Private
@@ -107,6 +201,32 @@ public struct WorkflowCompiler: Sendable {
     /// in workflow declaration order (the implicit join). This
     /// lets the `default:` linear-edge code in `emit` skip past
     /// sibling branch arms straight to the merge point.
+    /// Union of every `LoopStep.body` ID. Body nodes are
+    /// excluded from state-graph emission and from the
+    /// next-linear edge calculation — their lifecycle is owned
+    /// entirely by the parent loop's inline executor.
+    private static func computeLoopBodyNodeIDs(workflow: Workflow) -> Set<String> {
+        var ids: Set<String> = []
+        for node in workflow.nodes {
+            if case let .loop(loop) = node {
+                for bodyID in loop.body {
+                    ids.insert(bodyID.uuidString)
+                }
+            }
+        }
+        return ids
+    }
+
+    /// First non-body node name in declaration order — used as
+    /// the graph's entry point. A workflow whose only nodes are
+    /// loop-body nodes has no usable entry.
+    private static func firstNonBodyNodeName(
+        names: [String],
+        loopBodyNodeIDs: Set<String>
+    ) -> String? {
+        names.first { !loopBodyNodeIDs.contains($0) }
+    }
+
     private static func computeBranchExitOverrides(
         workflow: Workflow
     ) -> [String: String] {
@@ -158,7 +278,7 @@ public struct WorkflowCompiler: Sendable {
             self.wireParallel(
                 parallel: parallel,
                 name: name,
-                fallbackJoin: self.nextLinearNodeName(after: index, names: context.names),
+                fallbackJoin: self.nextLinearNodeName(after: index, context: context),
                 graph: &graph
             )
         case .output:
@@ -169,7 +289,7 @@ public struct WorkflowCompiler: Sendable {
             if let override = context.branchExitOverrides[name] {
                 graph.addEdge(from: name, to: override)
             } else {
-                graph.addEdge(from: name, to: self.nextLinearNodeName(after: index, names: context.names))
+                graph.addEdge(from: name, to: self.nextLinearNodeName(after: index, context: context))
             }
         }
     }
@@ -184,26 +304,59 @@ public struct WorkflowCompiler: Sendable {
     ) {
         switch node {
         case let .llm(step):
-            self.addLLMNode(step: step, name: name, graph: &graph)
+            self.addLLMNode(step: step, name: name, graph: &graph, sink: context.eventSink)
         case let .capability(step):
             self.addCapabilityNode(
                 step: step,
                 name: name,
                 graph: &graph,
                 callerPluginID: context.callerPluginID,
-                attended: context.attended
+                attended: context.attended,
+                sink: context.eventSink
+            )
+        case let .pluginTool(step):
+            self.addPluginToolNode(
+                step: step,
+                name: name,
+                graph: &graph,
+                sink: context.eventSink
+            )
+        case let .mcpTool(step):
+            self.addMCPToolNode(
+                step: step,
+                name: name,
+                graph: &graph,
+                sink: context.eventSink
             )
         case let .transform(step):
-            self.addTransformNode(step: step, name: name, graph: &graph)
+            self.addTransformNode(step: step, name: name, graph: &graph, sink: context.eventSink)
         case let .branch(branch):
-            self.addBranchPredicateNode(branch: branch, name: name, graph: &graph)
+            self.addBranchPredicateNode(
+                branch: branch,
+                name: name,
+                graph: &graph,
+                sink: context.eventSink
+            )
         case .parallel:
             // Parallel passthrough — the fan-out / fan-in edge
             // does the work. Still need a node body for the
             // graph's attachment point.
             graph.addNode(name) { state in state }
+        case let .loop(step):
+            let bodyNodes = step.body.compactMap { id in
+                context.workflow.nodes.first(where: { $0.id == id })
+            }
+            self.addLoopNode(
+                step: step,
+                bodyNodes: bodyNodes,
+                name: name,
+                graph: &graph,
+                callerPluginID: context.callerPluginID,
+                attended: context.attended,
+                sink: context.eventSink
+            )
         case let .output(step):
-            self.addOutputNode(step: step, name: name, graph: &graph)
+            self.addOutputNode(step: step, name: name, graph: &graph, sink: context.eventSink)
         }
     }
 
@@ -254,9 +407,20 @@ public struct WorkflowCompiler: Sendable {
     }
 
     /// Pick the next node to transition to when a step ends.
-    /// Falls off the end of the workflow → `.end` sentinel.
-    private func nextLinearNodeName(after index: Int, names: [String]) -> String {
-        let next = index + 1
-        return next < names.count ? names[next] : StateGraph<WorkflowState>.end
+    /// Skips past loop-body nodes (they don't have their own
+    /// state-graph nodes). Falls off the end → `.end` sentinel.
+    private func nextLinearNodeName(
+        after index: Int,
+        context: EmissionContext
+    ) -> String {
+        var nextIndex = index + 1
+        while nextIndex < context.names.count {
+            let candidate = context.names[nextIndex]
+            if !context.loopBodyNodeIDs.contains(candidate) {
+                return candidate
+            }
+            nextIndex += 1
+        }
+        return StateGraph<WorkflowState>.end
     }
 }

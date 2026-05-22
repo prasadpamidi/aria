@@ -48,6 +48,22 @@
             )
             builder.install(into: context)
 
+            // Install a captured `console` object — JS authors expect
+            // `console.log` to work. By default JSContext has no
+            // console, so the call would throw. Routing through our
+            // log buffer lets the dry-run UI replay output post-hoc
+            // (and lets future tooling stream logs from prod runs).
+            self.installConsole()
+
+            // JavaScriptCore ships pure ECMAScript — no host
+            // environment, so `setTimeout` / `setInterval` are
+            // undefined by default. Tools that want delayed work or
+            // a "wait, then continue" pattern need them, so we
+            // bridge dispatch-source timers as those globals. All
+            // timers are cancelled on `shutdown()` so a stuck
+            // interval can't outlive the runtime.
+            self.installTimers()
+
             // Evaluate the tool source. The tool is expected to define
             // `async function call(input)` at top level. We don't care
             // about the eval result here — we look up `call` at invoke
@@ -132,6 +148,18 @@
             // exception handler so any in-flight async exceptions don't
             // try to call back into a deallocated owner.
             self.context.exceptionHandler = nil
+            self.cancelAllTimers()
+        }
+
+        /// Returns any buffered console messages and clears the
+        /// buffer. Called by `JSToolProvider.dryRun` so the
+        /// authoring UI can surface logs alongside the call result.
+        func consumeLogs() -> [JSToolLogEntry] {
+            self.logLock.lock()
+            defer { self.logLock.unlock() }
+            let entries = self.logEntries
+            self.logEntries = []
+            return entries
         }
 
         // MARK: Private
@@ -139,6 +167,42 @@
         private let bundle: JSToolBundle
         private let context: JSContext
         private var lastException: String?
+        private var logEntries: [JSToolLogEntry] = []
+        private let logLock = NSLock()
+        private var pendingTimers: [Int: DispatchSourceTimer] = [:]
+        private var nextTimerID: Int = 1
+        private let timerLock = NSLock()
+
+        /// Render a single `console.log` argument. JS strings show
+        /// raw; primitives stringify; objects/arrays go through
+        /// `JSON.stringify` for a useful default beyond the
+        /// near-useless `[object Object]`.
+        private static func formatLogArgument(_ value: JSValue) -> String {
+            if value.isString {
+                return value.toString() ?? ""
+            }
+            if value.isUndefined {
+                return "undefined"
+            }
+            if value.isNull {
+                return "null"
+            }
+            if value.isBoolean || value.isNumber {
+                return value.toString() ?? ""
+            }
+            // Use JS-side JSON.stringify so objects/arrays render in
+            // a familiar shape. Fall back to `toString` if stringify
+            // throws (circular refs, etc.).
+            guard let context = value.context,
+                  let json = context.objectForKeyedSubscript("JSON"),
+                  let stringified = json.invokeMethod("stringify", withArguments: [value]) else {
+                return value.toString() ?? "[unprintable]"
+            }
+            if stringified.isUndefined || stringified.isNull {
+                return value.toString() ?? "[unprintable]"
+            }
+            return stringified.toString() ?? value.toString() ?? "[unprintable]"
+        }
 
         /// Convert a `JSONValue` (Aria's typed JSON enum) into a
         /// Foundation object graph (`NSDictionary` / `NSArray` /
@@ -216,6 +280,142 @@
                 return .object(map)
             }
             return .null
+        }
+
+        /// Wire `console.{log,info,warn,error}` to the runtime's
+        /// buffer. Each function captures variadic arguments via
+        /// `JSContext.currentArguments()` and stringifies them with
+        /// space separation — close enough to the browser console
+        /// shape that JS authors will recognise it.
+        private func installConsole() {
+            let consoleObj = JSValue(newObjectIn: self.context)
+            consoleObj?.setObject(
+                self.makeConsoleFn(level: .log) as Any,
+                forKeyedSubscript: "log" as NSString
+            )
+            consoleObj?.setObject(
+                self.makeConsoleFn(level: .info) as Any,
+                forKeyedSubscript: "info" as NSString
+            )
+            consoleObj?.setObject(
+                self.makeConsoleFn(level: .warn) as Any,
+                forKeyedSubscript: "warn" as NSString
+            )
+            consoleObj?.setObject(
+                self.makeConsoleFn(level: .error) as Any,
+                forKeyedSubscript: "error" as NSString
+            )
+            self.context.setObject(
+                consoleObj as Any,
+                forKeyedSubscript: "console" as NSString
+            )
+        }
+
+        private func makeConsoleFn(level: JSToolLogEntry.Level) -> @convention(block) () -> Void {
+            { [weak self] in
+                let arguments = JSContext.currentArguments() as? [JSValue] ?? []
+                let message = arguments
+                    .map { Self.formatLogArgument($0) }
+                    .joined(separator: " ")
+                self?.appendLog(level: level, message: message)
+            }
+        }
+
+        private func appendLog(level: JSToolLogEntry.Level, message: String) {
+            let entry = JSToolLogEntry(level: level, message: message, timestamp: Date())
+            self.logLock.lock()
+            self.logEntries.append(entry)
+            self.logLock.unlock()
+        }
+
+        // MARK: - Timers
+
+        /// Wire `setTimeout` / `setInterval` / `clearTimeout` /
+        /// `clearInterval` so JS authors get the browser-shaped
+        /// timer surface JavaScriptCore omits. Each function gets a
+        /// numeric handle the clear* functions take to cancel.
+        private func installTimers() {
+            let setTimeoutFn: @convention(block) (JSValue, Double) -> Int = { [weak self] callback, delay in
+                self?.scheduleTimer(repeats: false, delayMs: delay, callback: callback) ?? 0
+            }
+            let setIntervalFn: @convention(block) (JSValue, Double) -> Int = { [weak self] callback, delay in
+                self?.scheduleTimer(repeats: true, delayMs: delay, callback: callback) ?? 0
+            }
+            let clearFn: @convention(block) (Int) -> Void = { [weak self] identifier in
+                self?.cancelTimer(id: identifier)
+            }
+            self.context.setObject(
+                setTimeoutFn,
+                forKeyedSubscript: "setTimeout" as NSString
+            )
+            self.context.setObject(
+                setIntervalFn,
+                forKeyedSubscript: "setInterval" as NSString
+            )
+            self.context.setObject(
+                clearFn,
+                forKeyedSubscript: "clearTimeout" as NSString
+            )
+            self.context.setObject(
+                clearFn,
+                forKeyedSubscript: "clearInterval" as NSString
+            )
+        }
+
+        private func scheduleTimer(
+            repeats: Bool,
+            delayMs: Double,
+            callback: JSValue
+        ) -> Int {
+            self.timerLock.lock()
+            let identifier = self.nextTimerID
+            self.nextTimerID += 1
+            self.timerLock.unlock()
+
+            // Run timer events on the main queue so the JSContext
+            // (which is created on main in app use) stays
+            // thread-affine. Browser semantics also fire timers on
+            // the main runloop, so behaviour matches author
+            // expectations.
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            let delay = max(delayMs, 0)
+            let interval = DispatchTimeInterval.milliseconds(Int(delay))
+            if repeats {
+                timer.schedule(deadline: .now() + interval, repeating: interval)
+            } else {
+                timer.schedule(deadline: .now() + interval)
+            }
+            timer.setEventHandler { [weak self, weak callback] in
+                callback?.call(withArguments: [])
+                if !repeats {
+                    self?.cancelTimer(id: identifier)
+                }
+            }
+            self.timerLock.lock()
+            self.pendingTimers[identifier] = timer
+            self.timerLock.unlock()
+            timer.resume()
+            return identifier
+        }
+
+        private func cancelTimer(id: Int) {
+            self.timerLock.lock()
+            let timer = self.pendingTimers.removeValue(forKey: id)
+            self.timerLock.unlock()
+            timer?.cancel()
+        }
+
+        /// Cancel + drop every outstanding timer. Called from
+        /// `shutdown()` so a long-running `setInterval` can't
+        /// outlive its parent runtime.
+        private func cancelAllTimers() {
+            self.timerLock.lock()
+            let timers = self.pendingTimers.values
+            self.pendingTimers.removeAll()
+            self.timerLock.unlock()
+            for timer in timers {
+                timer.cancel()
+            }
         }
     }
 

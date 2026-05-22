@@ -112,19 +112,53 @@
             }
             let calendar = Calendar.current
             let start = calendar.startOfDay(for: Date())
-            let end = Date()
-            let predicate = HKQuery.predicateForSamples(withStart: start, end: end)
+            // Use `Date()` post-startOfDay so `end > start` even
+            // if the user invokes at exact midnight (which the
+            // sim sometimes does). `.strictStartDate` makes the
+            // predicate count only samples whose START falls in
+            // the day — without it iOS 17+ HKStatisticsQuery
+            // rejects the predicate as invalid for cumulative
+            // aggregation in some authorization states. That's
+            // the "predicate issue" the run sheet surfaced as
+            // an opaque HKError.
+            let end = max(Date(), start.addingTimeInterval(1))
+            let predicate = HKQuery.predicateForSamples(
+                withStart: start,
+                end: end,
+                options: .strictStartDate
+            )
             return try await withCheckedThrowingContinuation { continuation in
                 let query = HKStatisticsQuery(
                     quantityType: type,
                     quantitySamplePredicate: predicate,
                     options: .cumulativeSum
                 ) { _, stats, error in
-                    if let error {
-                        continuation.resume(throwing: error)
+                    if let error = error as NSError? {
+                        // "No data available for the specified
+                        // predicate" (HKError.errorNoData = 11)
+                        // isn't a failure — it means the user
+                        // simply hasn't logged any water samples
+                        // for today. Return 0 mL so workflows
+                        // can branch on `b.water.milliliters > N`
+                        // instead of treating zero-intake as
+                        // an exception.
+                        if error.domain == HKErrorDomain,
+                           error.code == HKError.Code.errorNoData.rawValue {
+                            continuation.resume(returning: 0)
+                            return
+                        }
+                        // Other errors stay surfaced — wrap so
+                        // the workflow run sheet shows a
+                        // human-readable message rather than
+                        // `Error Domain=… Code=…`.
+                        continuation.resume(throwing: HealthKitAccessError.queryFailed(
+                            "Water query failed: \(error.localizedDescription)"
+                        ))
                         return
                     }
-                    let value = stats?.sumQuantity()?.doubleValue(for: .literUnit(with: .milli)) ?? 0
+                    let value = stats?
+                        .sumQuantity()?
+                        .doubleValue(for: .literUnit(with: .milli)) ?? 0
                     continuation.resume(returning: value)
                 }
                 self.store.execute(query)
@@ -196,7 +230,24 @@
 
     // MARK: - HealthKitAccessError
 
-    public enum HealthKitAccessError: Error, Sendable, Equatable {
+    public enum HealthKitAccessError: LocalizedError, Sendable, Equatable {
         case unavailableOnDevice
+        /// A HealthKit query rejected its predicate or returned
+        /// an unexpected error. The associated string is the
+        /// underlying HKError's localizedDescription with the
+        /// caller's context prepended so the workflow run sheet
+        /// can show something readable.
+        case queryFailed(String)
+
+        // MARK: Public
+
+        public var errorDescription: String? {
+            switch self {
+            case .unavailableOnDevice:
+                "HealthKit isn't available on this device."
+            case let .queryFailed(message):
+                message
+            }
+        }
     }
 #endif
