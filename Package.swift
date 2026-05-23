@@ -93,6 +93,16 @@ let package = Package(
         .library(name: "WorkflowKit", targets: ["WorkflowKit"]),
     ],
     traits: [
+        // Default-enabled traits. Apple-platform consumers (the
+        // typical case) get the full MLX + Kokoro surfaces with
+        // zero config. Linux / pure-server consumers turn these
+        // off with `swift build --traits ""` or by passing
+        // `defaultTraits: false, traits: []` from their
+        // Package.swift; aria's own Linux CI uses
+        // `swift build --target Aria` which doesn't pull MLX /
+        // Kokoro into the build graph regardless.
+        .default(enabledTraits: ["MLX", "VoiceKokoro"]),
+
         // Pulls in `mlx-swift-lm` 3.x + tokenizer / HF-hub adapters.
         // Apple-Silicon-only at the dep level; the AriaMLX source
         // additionally uses `#if canImport(MLXLMCommon)` so the

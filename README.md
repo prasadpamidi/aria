@@ -1,14 +1,27 @@
 # Aria
 
-**Composable on-device agent runtime for Apple platforms.**
+**Composable on-device + remote agent runtime for Apple platforms.**
 
-Aria is a Swift library for building agent-driven applications that run on-device using Apple's FoundationModels, MLX, or Core ML. It provides a tool-calling agent runtime, type-safe abstractions over local LLMs, memory primitives, and an optional graph orchestration layer.
+Aria is a Swift library for building agent-driven applications. The
+default path runs on-device using Apple's FoundationModels, MLX, or
+Core ML; the same `Agent` and `WorkflowKit` surfaces also drive
+remote OpenAI / Anthropic / Gemini / OpenAI-compatible providers
+(see [Remote-LLM orchestration](#remote-llm-orchestration) below for
+the current limitations). Aria provides a tool-calling agent
+runtime, type-safe abstractions over LLMs, memory primitives, a
+workflow runtime with native + JS-plugin capabilities, an Anthropic-
+style skill system, and an optional graph orchestration layer.
 
-The core is platform-agnostic and builds on Linux. Apple-specific implementations live in `AriaApple`.
+The core is platform-agnostic and builds on Linux. Apple-specific
+implementations live in `AriaApple`.
 
 > **Status:** Layers 1–6 are implemented and tested on iOS 26 / macOS 26 / Linux. Headline features:
 >
 > - Tool-calling **Agent** with streaming events, the full middleware stack (history persistence, windowing, summarization, RAG retrieval, automatic fact extraction), and **provider-agnostic** structured-output `respond(_:as:)` that works against FoundationModels and any cloud `LLMProvider`.
+> - **WorkflowKit** runtime — Codable workflow model, GRDB persistence, compile-to-`StateGraph` engine, capability broker for native iOS frameworks, JS plugin steps, per-step server-LLM routing, MCP integration, skill resolution. See [`docs/workflowkit.md`](docs/workflowkit.md).
+> - **Skills** — Anthropic-style instruction bundles (`SKILL.md` frontmatter + body) with `SkillProvider`, on-demand `load_skill` tool, per-thread / per-workflow overrides via `SkillOverridesStore`. See [`docs/skills.md`](docs/skills.md).
+> - **JS plugin tools** — sandboxed `JSContext`-based runtime (`AriaToolsJS`) that loads `.aria-tool` bundles. Capabilities (HTTP, JSON, clipboard, share, notify, storage) are gated by per-bundle manifest declarations and enforced at bridge-construction time. See [`docs/plugins.md`](docs/plugins.md).
+> - **Native capabilities** — Keychain-backed secrets, Calendar / Reminders, HealthKit, CoreLocation, EventKit, Files, Clipboard, Share, Notifications, HTTP, Focus, Shortcuts. Wrapped behind a `CapabilityBroker` that enforces per-plugin grants.
 > - **StateGraph** with conditional edges, parallel branches + reducers, agent-as-node helpers, and resumable runs via the `Checkpointer`.
 > - **Memory layer** with persistent SQLite chat history + vector store (`GRDBChatHistory`, `GRDBVectorStore`), `NLEmbeddingEmbedder` for on-device embeddings, and `HistoryRetentionPolicy` for bounded disk growth.
 > - **Long-thread strategies that just compose**: `HistoryWindowMiddleware` (turns + token caps), `HistorySummarizationMiddleware` (compress older portion into a summary system message), `FactExtractionMiddleware` (auto-mine durable user facts into `MemoryStore`).
@@ -101,13 +114,6 @@ bundle exec fastlane package_build_all          # --traits MLX,VoiceKokoro
 bundle exec fastlane package_tests              # swift test
 bundle exec fastlane quality                    # swiftformat + swiftlint
 ```
-
-## Sibling repos
-
-- **Avyra** — the iOS reference app shipped on the App Store.
-  Repo: <https://github.com/3theories/avyra>. Avyra consumes
-  Aria as a remote SPM dependency with `MLX` + `VoiceKokoro`
-  traits enabled.
 
 ## Quick start
 
@@ -248,16 +254,60 @@ Run the same flow as a CLI demo:
 swift run AriaCLI    # records, prints the JSON bundle, replays it
 ```
 
+## Remote-LLM orchestration
+
+Aria's `Agent` and `WorkflowKit` runtime accept any `LLMProvider`
+conformer — the on-device FoundationModels / MLX providers are the
+default path, but cloud OpenAI / Anthropic / Gemini /
+OpenAI-compatible endpoints work the same way. A workflow step
+declares `serverProviderID: "openai-prod"` (or leaves it `nil` for
+the default provider) and the runtime resolves the right transport
+at compile time.
+
+What works today:
+
+- Streaming text and structured-output `respond(_:as:)` against any
+  `LLMProvider` — `FoundationModelsProvider`, `MLXProvider`, and
+  the server-LLM resolver path in `WorkflowKit` cover the same
+  agent + middleware stack.
+- Per-workflow-step routing via `ServerLLMProviderResolver` so a
+  workflow can mix on-device steps with cloud steps in one graph.
+- Credential resolution via `CredentialStore` so each server
+  provider's API key + auth headers come from Keychain, not config
+  files.
+
+Known limitations / pending work:
+
+- **Tool-calling against server LLMs** is wired end-to-end for
+  OpenAI-compatible providers but the typed-tool surface still
+  routes most cleanly through FoundationModels' `@Generable` path
+  on Apple platforms. Cloud-provider tool calls go through the
+  same `Agent` runtime but the JSON-schema → `@Generable`
+  round-trip is opaquer; complex multi-tool runs may need a
+  schema-level adapter per provider.
+- **Streaming semantics** vary by provider (OpenAI's chunked
+  `data:` SSE vs Anthropic's event-typed SSE vs Gemini's protobuf
+  responses). Aria normalizes to a single `ProviderEvent` stream;
+  edge cases like mid-stream tool calls in newer Anthropic
+  `tool_use` events are still being hardened.
+- **MCP servers** are integrated as a tool surface but rate
+  limiting / retry behaviour across MCP transports (`stdio`,
+  `http`) is a per-server contract that callers wire themselves.
+- **Provider error normalization** still leaks transport-specific
+  details in some failure modes. Treat `ProviderError` as a hint,
+  not a stable contract.
+
+See [`docs/workflowkit.md`](docs/workflowkit.md) for the routing /
+resolver shape and a worked OpenAI + on-device hybrid example.
+
 ## Build and test
 
 ```bash
-swift build                                # build the package
+swift build                                # build the package (default traits)
+swift build --traits MLX,VoiceKokoro       # build with the heavy traits
 swift test                                 # run all tests
 swift test --filter AriaTests              # core tests (Linux-safe)
 swift run AriaCLI                          # run the CLI demo
-
-# Avyra (the iOS app built on Aria)
-open Apps/AvyraApp/Avyra.xcodeproj
 ```
 
 ### Local setup (one-time)
@@ -273,12 +323,14 @@ bundle install                # fastlane
 Routine work goes through Fastlane lanes:
 
 ```bash
-bundle exec fastlane package_tests       # swift test
-bundle exec fastlane app_local_build        # build Avyra on iOS Simulator
-bundle exec fastlane lint                # SwiftLint
-bundle exec fastlane format              # SwiftFormat (in place)
-bundle exec fastlane quality             # format --lint + lint
-bundle exec fastlane quality fix:true    # auto-fix both
+bundle exec fastlane package_build         # swift build (default traits)
+bundle exec fastlane package_build_all     # all trait variants
+bundle exec fastlane package_tests         # swift test
+bundle exec fastlane cli_demo              # swift run AriaCLI
+bundle exec fastlane lint                  # SwiftLint
+bundle exec fastlane format                # SwiftFormat (in place)
+bundle exec fastlane quality               # format --lint + lint
+bundle exec fastlane quality fix:true      # auto-fix both
 ```
 
 See [`AGENTS.md`](AGENTS.md) for the full lane reference.
@@ -288,6 +340,10 @@ See [`AGENTS.md`](AGENTS.md) for the full lane reference.
 - [`docs/overview.md`](docs/overview.md) — what Aria is, who it's for
 - [`docs/principles.md`](docs/principles.md) — architectural principles
 - [`docs/architecture.md`](docs/architecture.md) — layered design and module layout
+- [`docs/traits.md`](docs/traits.md) — SPM traits (MLX, VoiceKokoro)
+- [`docs/workflowkit.md`](docs/workflowkit.md) — workflow runtime, capabilities, server-LLM routing
+- [`docs/skills.md`](docs/skills.md) — Anthropic-style skill bundles
+- [`docs/plugins.md`](docs/plugins.md) — JS plugin tools (`.aria-tool` runtime)
 - [`docs/platform-boundary.md`](docs/platform-boundary.md) — cross-platform discipline
 - [`docs/observability.md`](docs/observability.md) — OTel tracing/metrics + session recording / replay
 - [`docs/layers/`](docs/layers/) — per-layer specs

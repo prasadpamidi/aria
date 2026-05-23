@@ -41,17 +41,21 @@ jobs:
       - name: Show Swift version
         run: swift --version
 
+      # `--traits ""` disables the default-enabled MLX + VoiceKokoro
+      # traits whose Apple-only deps (mlx-swift, kokoro-ios) don't
+      # build on Linux. Aria's core / testing / tools targets don't
+      # need either trait.
       - name: Build core target
-        run: swift build --target Aria
+        run: swift build --target Aria --traits ""
 
       - name: Build testing target
-        run: swift build --target AriaTesting
+        run: swift build --target AriaTesting --traits ""
 
       - name: Build tools target
-        run: swift build --target AriaTools
+        run: swift build --target AriaTools --traits ""
 
       - name: Run core tests
-        run: swift test --filter AriaTests
+        run: swift test --filter AriaTests --traits ""
 
   # ------------------------------------------------------------------
   # macOS — full build & test of every target including AriaApple,
