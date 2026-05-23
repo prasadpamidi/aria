@@ -3,7 +3,7 @@ import Foundation
 
 // MARK: - JSToolBundle
 
-/// On-disk format for a JS-backed tool — a single `.avyra-tool` JSON
+/// On-disk format for a JS-backed tool — a single `.aria-tool` JSON
 /// file with all the metadata + the JS source as a string field.
 /// Picked single-file over a folder because AirDrop / Messages /
 /// Files all handle one file cleanly; folder distribution would
@@ -25,8 +25,8 @@ import Foundation
 ///   "author": "Jane Doe",
 ///   "capabilities": ["http", "json"],
 ///   "inputSchema": { "type": "object", "properties": { … }, "required": ["city"] },
-///   "main": "async function call(input) { const r = await Avyra.http.get(`https://wttr.in/${input.city}?format=j1`);
-/// return Avyra.json.parse(r.body); }"
+///   "main": "async function call(input) { const r = await Aria.http.get(`https://wttr.in/${input.city}?format=j1`);
+/// return Aria.json.parse(r.body); }"
 /// }
 /// ```
 public struct JSToolBundle: Codable, Sendable, Equatable {
@@ -118,7 +118,7 @@ public struct JSToolBundle: Codable, Sendable, Equatable {
         Set(self.capabilities)
     }
 
-    /// Read and decode a `.avyra-tool` file from disk.
+    /// Read and decode a `.aria-tool` file from disk.
     public static func load(from url: URL) throws -> JSToolBundle {
         let data = try Data(contentsOf: url)
         return try Self.load(from: data)

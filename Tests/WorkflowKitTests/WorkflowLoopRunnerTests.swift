@@ -37,7 +37,7 @@
             let result = try await Self.makeRunner().run(
                 workflow,
                 input: [:],
-                callerPluginID: "avyra.builtin.test"
+                callerPluginID: "sdk.builtin.test"
             )
 
             #expect(result["final"] == .string("5"))
@@ -66,7 +66,7 @@
             let result = try await Self.makeRunner().run(
                 workflow,
                 input: [:],
-                callerPluginID: "avyra.builtin.test"
+                callerPluginID: "sdk.builtin.test"
             )
 
             // `b.counter` was never written, so the template
@@ -100,7 +100,7 @@
             let result = try await Self.makeRunner().run(
                 workflow,
                 input: [:],
-                callerPluginID: "avyra.builtin.test"
+                callerPluginID: "sdk.builtin.test"
             )
 
             #expect(result["final"] == .string("3"))
@@ -131,7 +131,7 @@
                 _ = try await Self.makeRunner().run(
                     workflow,
                     input: [:],
-                    callerPluginID: "avyra.builtin.test"
+                    callerPluginID: "sdk.builtin.test"
                 )
             }
         }
@@ -160,7 +160,7 @@
             let result = try await Self.makeRunner().run(
                 workflow,
                 input: [:],
-                callerPluginID: "avyra.builtin.test"
+                callerPluginID: "sdk.builtin.test"
             )
 
             // Final iteration's index = 2 (0,1,2 then condition
@@ -188,7 +188,7 @@
                 _ = try await Self.makeRunner().run(
                     workflow,
                     input: [:],
-                    callerPluginID: "avyra.builtin.test"
+                    callerPluginID: "sdk.builtin.test"
                 )
             }
         }

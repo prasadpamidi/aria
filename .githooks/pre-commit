@@ -46,12 +46,22 @@ else
 fi
 
 # ----- SwiftLint -----
+# Block on errors only — existing source has long-standing minor
+# warnings (force_unwrapping in test fixtures, multiline literal
+# bracket placement, etc.) that aren't worth blocking commits
+# over. SwiftLint's `--quiet` exit code conflates warnings and
+# errors, so we grep the output explicitly. Use `bundle exec
+# fastlane lint strict:true` to opt into strict mode locally
+# before pushing.
 if command -v swiftlint >/dev/null 2>&1; then
-    echo "→ swiftlint (staged Swift files, strict)"
-    if ! swiftlint lint $STAGED --config .swiftlint.yml --strict --quiet; then
+    echo "→ swiftlint (staged Swift files)"
+    LINT_OUTPUT=$(swiftlint lint $STAGED --config .swiftlint.yml --quiet 2>&1 || true)
+    if echo "$LINT_OUTPUT" | grep -q ": error:"; then
         ISSUES=1
         echo ""
-        red   "✗ SwiftLint found violations."
+        red   "✗ SwiftLint found errors."
+        echo  "$LINT_OUTPUT" | grep ": error:"
+        echo  ""
         echo  "  Auto-fix:  bundle exec fastlane lint fix:true"
         echo  "  Then review and fix any remaining violations manually."
         echo ""

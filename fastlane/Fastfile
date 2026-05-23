@@ -1,38 +1,27 @@
 # frozen_string_literal: true
 
-# Fastfile for Aria
-# Lanes for building, testing, and quality-checking the Aria Swift package
-# and the Avyra iOS app (the sample app that ships on top of the package).
+# Fastfile for Aria — the SDK.
+#
+# The Avyra app + its release / TestFlight lanes live in
+# https://github.com/3theories/avyra (`avyra/fastlane/Fastfile`).
+# This file only knows about the Swift package: build, test, lint,
+# format. No code signing, no Xcode app project.
 #
 # Usage examples:
-#   bundle exec fastlane package_build      # swift build
-#   bundle exec fastlane package_tests      # swift test (all targets)
-#   bundle exec fastlane core_tests         # swift test --filter AriaTests (Linux-safe)
-#   bundle exec fastlane app_local_build       # build Avyra on iOS Simulator
-#   bundle exec fastlane app_tests       # run Avyra tests on iOS Simulator
-#   bundle exec fastlane lint               # SwiftLint
-#   bundle exec fastlane lint fix:true      # SwiftLint --fix
-#   bundle exec fastlane format             # SwiftFormat (in place)
-#   bundle exec fastlane format lint:true   # SwiftFormat --lint (no writes)
-#   bundle exec fastlane quality            # format --lint + lint
-#   bundle exec fastlane ci_quality         # quality, CI-friendly
-#   bundle exec fastlane ci_build_test      # package_tests + app_local_build + app_tests
-#   bundle exec fastlane app_release_build        # archive Avyra.ipa
-#   bundle exec fastlane app_release_local        # archive without uploading
-#   bundle exec fastlane app_upload_testflight    # archive + upload to TestFlight
-#   bundle exec fastlane app_release              # archive + upload to App Store
-#   bundle exec fastlane app_submit_review        # submit existing build for review
-#   bundle exec fastlane app_bump_version type:minor   # x.Y.0
-#   bundle exec fastlane app_set_version version:1.2.0
-#   bundle exec fastlane app_version_info
-#   bundle exec fastlane ci_testflight            # CI: TestFlight roll-out
-#   bundle exec fastlane ci_release               # CI: App Store roll-out
-#   bundle exec fastlane clean                    # clear build artifacts
-#
-# Release lanes expect either an App Store Connect API key file
-# (set APP_STORE_CONNECT_API_KEY_PATH to the JSON spec) or an
-# Apple ID with a seeded FASTLANE_SESSION. See the inline doc
-# block on the release lanes for details.
+#   bundle exec fastlane package_build       # swift build (default traits)
+#   bundle exec fastlane package_build_mlx   # swift build --traits MLX
+#   bundle exec fastlane package_build_all   # swift build --traits MLX,VoiceKokoro
+#   bundle exec fastlane package_tests       # swift test (all targets)
+#   bundle exec fastlane core_tests          # swift test --filter AriaTests (Linux-safe)
+#   bundle exec fastlane cli_demo            # swift run AriaCLI
+#   bundle exec fastlane lint                # SwiftLint
+#   bundle exec fastlane lint fix:true       # SwiftLint --fix
+#   bundle exec fastlane format              # SwiftFormat (in place)
+#   bundle exec fastlane format lint:true    # SwiftFormat --lint (no writes)
+#   bundle exec fastlane quality             # format --lint + lint
+#   bundle exec fastlane ci_quality          # quality, CI-friendly
+#   bundle exec fastlane ci_build_test       # all trait variants + tests
+#   bundle exec fastlane clean               # clear build artifacts
 
 default_platform(:ios)
 
@@ -41,18 +30,12 @@ default_platform(:ios)
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = File.expand_path("..", __dir__)
-APP_PROJECT = File.join(PROJECT_ROOT, "Apps/AvyraApp/Avyra.xcodeproj")
-APP_SCHEME = "Avyra"
-DEFAULT_SIMULATOR = "iPhone 17"
 
 # Paths SwiftFormat / SwiftLint should cover (relative to repo root).
 QUALITY_PATHS = [
   "Sources",
   "Tests",
-  "Apps/AriaCLI",
-  "Apps/AvyraApp/Avyra",
-  "Apps/AvyraApp/AvyraTests",
-  "Apps/AvyraApp/AvyraUITests"
+  "Apps/AriaCLI"
 ].freeze
 
 # ---------------------------------------------------------------------------
@@ -63,29 +46,16 @@ def in_root(command)
   sh("cd '#{PROJECT_ROOT}' && #{command}")
 end
 
-def simulator_destination(options, prefer_generic: false)
-  if options[:id]
-    "platform=iOS Simulator,id=#{options[:id]}"
-  elsif options[:device]
-    "platform=iOS Simulator,name=#{options[:device]}"
-  elsif prefer_generic
-    "generic/platform=iOS Simulator"
-  else
-    "platform=iOS Simulator,name=#{DEFAULT_SIMULATOR}"
-  end
-end
-
 def quality_paths_string
   QUALITY_PATHS.map { |p| "\"#{File.join(PROJECT_ROOT, p)}\"" }.join(" ")
 end
 
 # SwiftFormat helper. Called by both the `format` lane and the
-# `quality`/`ci_quality` aggregator lanes. Lives outside the lanes
+# `quality` / `ci_quality` aggregators. Lives outside the lanes
 # because the lane is named `format`, which collides with Ruby's
 # built-in `Kernel#format`: calling `format(...)` from inside another
 # lane resolves to `Kernel.format` (printf), not the Fastlane lane,
 # and explodes with "no implicit conversion of Hash into String".
-# The helper sidesteps the collision entirely.
 def run_swiftformat(lint:, verbose: false)
   config = File.join(PROJECT_ROOT, ".swiftformat")
   extra = []
@@ -108,12 +78,6 @@ def run_swiftformat(lint:, verbose: false)
   end
 end
 
-# SwiftLint helper. Mirrors `run_swiftformat`; the `lint` lane and
-# aggregator lanes both delegate here. `lint` doesn't collide with
-# any Kernel method, but the symmetry keeps the file consistent and
-# means the aggregator lanes never call other lanes (no risk of the
-# Ruby 3.2 keyword-args / Hash interop weirdness Fastlane's lane
-# runner has).
 def run_swiftlint(fix:, strict: false)
   config = File.join(PROJECT_ROOT, ".swiftlint.yml")
   mode = fix ? "--fix" : "lint"
@@ -133,35 +97,33 @@ def run_swiftlint(fix:, strict: false)
   end
 end
 
-# App Store Connect API key resolution for release lanes. Returns
-# either a parsed JSON-key spec (preferred, CI-friendly, no 2FA) or
-# nil — in which case Fastlane falls back to interactive Apple-ID
-# auth via the Appfile's `apple_id`. The key file path comes from
-# `APP_STORE_CONNECT_API_KEY_PATH`; the file is the standard
-# Fastlane format with `key_id`, `issuer_id`, and `key` (PEM body).
-def api_key_for_release
-  path = ENV["APP_STORE_CONNECT_API_KEY_PATH"]
-  return nil if path.nil? || path.empty?
-
-  unless File.exist?(path)
-    UI.user_error!("APP_STORE_CONNECT_API_KEY_PATH points to a missing file: #{path}")
-  end
-
-  app_store_connect_api_key(
-    key_filepath: path,
-    in_house: false
-  )
-end
-
 # ---------------------------------------------------------------------------
 # Swift Package lanes
 # ---------------------------------------------------------------------------
 
 platform :ios do
-  desc "Build the Swift package (all targets)"
+  desc "Build the Swift package (default traits — Aria core + WorkflowKit)"
   lane :package_build do
     in_root("swift build")
-    UI.success("Swift package build complete")
+    UI.success("Swift package build complete (default traits)")
+  end
+
+  desc "Build the Swift package with the MLX trait enabled"
+  lane :package_build_mlx do
+    in_root("swift build --traits MLX")
+    UI.success("Swift package build complete (MLX)")
+  end
+
+  desc "Build the Swift package with the VoiceKokoro trait enabled"
+  lane :package_build_voice_kokoro do
+    in_root("swift build --traits VoiceKokoro")
+    UI.success("Swift package build complete (VoiceKokoro)")
+  end
+
+  desc "Build the Swift package with every trait enabled"
+  lane :package_build_all do
+    in_root("swift build --traits MLX,VoiceKokoro")
+    UI.success("Swift package build complete (MLX + VoiceKokoro)")
   end
 
   desc "Run all Swift package tests"
@@ -179,289 +141,6 @@ platform :ios do
   desc "Run the CLI demo (`swift run AriaCLI`)"
   lane :cli_demo do
     in_root("swift run AriaCLI")
-  end
-
-  # -----------------------------------------------------------------------
-  # Avyra (Xcode) lanes
-  # -----------------------------------------------------------------------
-
-  desc "Build Avyra for iOS Simulator"
-  desc "Options:"
-  desc "  device:'iPhone 17'   - Simulator by name"
-  desc "  id:'<uuid>'          - Simulator by UDID"
-  desc "  clean:true           - Clean before building"
-  desc ""
-  desc "With no device/id, builds against the generic iOS Simulator"
-  desc "destination — works on any Mac (including CI runners) without"
-  desc "requiring a specific simulator to be installed. Tests need a"
-  desc "real named simulator; pass device:'iPhone 17 Pro' or id:'<uuid>'"
-  desc "to target one for local debug runs."
-  lane :app_local_build do |options|
-    destination = simulator_destination(options, prefer_generic: true)
-    UI.message("Building Avyra for: #{destination}")
-
-    xcodebuild(
-      project: APP_PROJECT,
-      scheme: APP_SCHEME,
-      configuration: "Debug",
-      destination: destination,
-      build: true,
-      clean: options[:clean] || false,
-      xcargs: "CODE_SIGN_IDENTITY='' CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO"
-    )
-
-    UI.success("Avyra build complete")
-  end
-
-  desc "Run Avyra tests on iOS Simulator"
-  desc "Options: device, id, clean — same as app_local_build"
-  lane :app_tests do |options|
-    destination = simulator_destination(options)
-    UI.message("Testing Avyra on: #{destination}")
-
-    # `output_types: ""` (and the disabled result-bundle) suppress
-    # scan's post-test invocation of `trainer`, which calls the
-    # deprecated `xcresulttool get --format json` API removed in
-    # Xcode 16. Fastlane 2.220.0 hasn't been updated to the new
-    # `--legacy` form, so trainer crashes after the run already
-    # succeeded. xcodebuild's exit code stays authoritative —
-    # `fail_build: true` propagates a non-zero test exit into the
-    # lane.
-    run_tests(
-      project: APP_PROJECT,
-      scheme: APP_SCHEME,
-      destination: destination,
-      clean: options[:clean] || false,
-      code_coverage: true,
-      skip_package_dependencies_resolution: false,
-      output_types: "",
-      fail_build: true,
-      result_bundle: false
-    )
-
-    UI.success("Avyra tests passed")
-  end
-
-  # -----------------------------------------------------------------------
-  # Release lanes
-  # -----------------------------------------------------------------------
-  #
-  # These lanes produce an Avyra .ipa signed for App Store distribution
-  # and ship it to TestFlight / the App Store. They expect either:
-  #
-  #   1. **App Store Connect API key** (recommended, CI-friendly):
-  #      Set `APP_STORE_CONNECT_API_KEY_PATH` to a JSON file with
-  #      `{ key_id, issuer_id, key (PEM body) }`. Fastlane handles
-  #      auth for both pilot (TestFlight) and deliver (App Store).
-  #
-  #   2. **Apple ID + 2FA session**: Set `APPLE_ID` in the Appfile
-  #      and use `fastlane spaceauth -u <apple-id>` once to seed
-  #      `FASTLANE_SESSION`. Works locally; not viable on CI.
-  #
-  # Code signing assumes Automatic signing in the Xcode project
-  # (which is how the project is set up — `CODE_SIGN_STYLE = Automatic`,
-  # `DEVELOPMENT_TEAM = 259ZX2VB4Z`). For tighter CI control, swap to
-  # `match` and wire the certificates lane separately.
-  #
-  # Bumping the build number: `app_release_build bump:true` runs
-  # `increment_build_number` first; without it the lane uses the
-  # project's current `CURRENT_PROJECT_VERSION`.
-
-  desc "Archive Avyra for App Store distribution"
-  desc "Options:"
-  desc "  skip_bump:true        - Don't auto-bump the build number"
-  desc "  skip_branch_check:true - Allow non-main / non-release branch archives"
-  desc "  output:'<path>'       - Where to write the .ipa (default ./build)"
-  desc "  configuration:'Release'  (default)"
-  lane :app_release_build do |options|
-    output_dir = options[:output] || File.join(PROJECT_ROOT, "build")
-    configuration = options[:configuration] || "Release"
-
-    # Branch guard: production archives should come from `main` or a
-    # `release/*` branch so feature work doesn't accidentally ship.
-    # CI sets `SKIP_BRANCH_CHECK` for tag-driven releases that may
-    # land on detached HEAD.
-    ensure_release_branch unless options[:skip_branch_check] || ENV["SKIP_BRANCH_CHECK"]
-
-    # Auto-stamp `CFBundleVersion` with a yyyymmddHHMM timestamp so
-    # every CI archive gets a monotonically-increasing, unique
-    # build number without manual coordination. Opt out with
-    # `skip_bump:true` if the caller already bumped manually.
-    increment_build_number_with_timestamp unless options[:skip_bump]
-
-    build_ios_app(
-      project: APP_PROJECT,
-      scheme: APP_SCHEME,
-      configuration: configuration,
-      export_method: "app-store",
-      output_directory: output_dir,
-      output_name: "Avyra.ipa",
-      clean: true,
-      include_bitcode: false,
-      include_symbols: true,
-      # Avyra signs automatically via the team id in the project.
-      # `signingStyle: "automatic"` here is informational — the
-      # actual signing is driven by the xcconfig.
-      export_options: {
-        method: "app-store",
-        signingStyle: "automatic",
-        teamID: ENV["APPLE_TEAM_ID"] || "259ZX2VB4Z",
-        uploadBitcode: false,
-        uploadSymbols: true
-      }
-    )
-
-    UI.success("Avyra archive built at #{output_dir}/Avyra.ipa")
-  end
-
-  desc "Archive Avyra locally without uploading"
-  lane :app_release_local do
-    app_release_build(skip_branch_check: true)
-  end
-
-  desc "Upload Avyra to TestFlight (does not submit to App Review)"
-  desc "Options:"
-  desc "  ipa:'<path>'           - Pre-built ipa to upload (skips archive step)"
-  desc "  skip_waiting:true      - Don't wait for processing to finish"
-  desc "  distribute_external:true - Roll out to external testers (default: internal only)"
-  desc "  groups:'A,B'           - Restrict external rollout to specific groups"
-  desc "  changelog:'<text>'     - Override the default git-derived changelog"
-  lane :app_upload_testflight do |options|
-    ipa_path = options[:ipa] || File.join(PROJECT_ROOT, "build/Avyra.ipa")
-
-    # Auto-archive if the caller didn't supply a prebuilt ipa or the
-    # default file is missing. Keeps "build + upload" a single command.
-    unless options[:ipa] || File.exist?(ipa_path)
-      app_release_build(
-        skip_branch_check: options[:skip_branch_check] || false
-      )
-    end
-
-    api_key = api_key_for_release
-
-    upload_to_testflight(
-      api_key: api_key,
-      ipa: ipa_path,
-      skip_waiting_for_build_processing: options[:skip_waiting] || false,
-      distribute_external: options[:distribute_external] || false,
-      groups: options[:groups],
-      # Default changelog: the subjects of the last 5 commits.
-      # Internal builds are noisy so this is more useful than a
-      # static "Internal build." string. CI can override.
-      changelog: options[:changelog] || changelog_from_git_commits(commits_count: 5)
-    )
-
-    UI.success("Avyra uploaded to TestFlight")
-  end
-
-  desc "Submit Avyra to the App Store (creates a new version and uploads)"
-  desc "Options:"
-  desc "  ipa:'<path>'              - Pre-built ipa (skips archive)"
-  desc "  submit_for_review:true    - Send to App Review after upload"
-  desc "  automatic_release:true    - Release automatically once approved"
-  desc "  include_metadata:true     - Upload App Store metadata too"
-  desc "  include_screenshots:true  - Upload screenshots too"
-  lane :app_release do |options|
-    ipa_path = options[:ipa] || File.join(PROJECT_ROOT, "build/Avyra.ipa")
-
-    unless options[:ipa] || File.exist?(ipa_path)
-      app_release_build(
-        skip_branch_check: options[:skip_branch_check] || false
-      )
-    end
-
-    api_key = api_key_for_release
-
-    upload_to_app_store(
-      api_key: api_key,
-      ipa: ipa_path,
-      # Skip metadata/screenshots upload by default — those are
-      # managed in App Store Connect directly until we wire a
-      # `fastlane/metadata` tree. Pass `include_metadata:true` /
-      # `include_screenshots:true` once that tree exists.
-      skip_metadata: !options[:include_metadata],
-      skip_screenshots: !options[:include_screenshots],
-      submit_for_review: options[:submit_for_review] || false,
-      automatic_release: options[:automatic_release] || false,
-      submission_information: {
-        # Lean defaults: no IDFA, no encryption export compliance.
-        # Override per-build via the App Store Connect UI when these
-        # change.
-        add_id_info_uses_idfa: false,
-        add_id_info_serves_ads: false,
-        add_id_info_tracks_action: false,
-        add_id_info_tracks_install: false,
-        export_compliance_uses_encryption: false
-      },
-      precheck_include_in_app_purchases: false,
-      force: options[:force] || false
-    )
-
-    UI.success("Avyra submitted to App Store Connect")
-  end
-
-  desc "Submit an existing App Store Connect build for App Review"
-  desc "Options:"
-  desc "  automatic_release:true  - Release automatically once approved"
-  lane :app_submit_review do |options|
-    api_key = api_key_for_release
-
-    upload_to_app_store(
-      api_key: api_key,
-      skip_binary_upload: true,
-      skip_metadata: true,
-      skip_screenshots: true,
-      submit_for_review: true,
-      automatic_release: options[:automatic_release] || false,
-      submission_information: {
-        add_id_info_uses_idfa: false,
-        add_id_info_serves_ads: false,
-        add_id_info_tracks_action: false,
-        add_id_info_tracks_install: false,
-        export_compliance_uses_encryption: false
-      },
-      force: options[:force] || false
-    )
-
-    UI.success("Avyra submitted for App Review")
-  end
-
-  # -----------------------------------------------------------------------
-  # Version management
-  # -----------------------------------------------------------------------
-
-  desc "Bump the marketing version (major / minor / patch — default patch)"
-  desc "Options:"
-  desc "  type:'major'|'minor'|'patch'"
-  lane :app_bump_version do |options|
-    bump_type = options[:type] || "patch"
-    increment_version_number(
-      bump_type: bump_type,
-      xcodeproj: APP_PROJECT
-    )
-    version = get_version_number(xcodeproj: APP_PROJECT, target: APP_SCHEME)
-    UI.success("Marketing version bumped to #{version}")
-  end
-
-  desc "Set the marketing version explicitly"
-  desc "Options:"
-  desc "  version:'1.2.0' (required)"
-  lane :app_set_version do |options|
-    UI.user_error!("Pass version:'<x.y.z>' (e.g. version:'1.2.0')") unless options[:version]
-    increment_version_number(
-      version_number: options[:version],
-      xcodeproj: APP_PROJECT
-    )
-    UI.success("Marketing version set to #{options[:version]}")
-  end
-
-  desc "Print current Avyra version + build number"
-  lane :app_version_info do
-    version = get_version_number(xcodeproj: APP_PROJECT, target: APP_SCHEME)
-    build = get_build_number(xcodeproj: APP_PROJECT)
-    UI.message("Marketing version: #{version}")
-    UI.message("Build number    : #{build}")
-    { version: version, build: build }
   end
 
   # -----------------------------------------------------------------------
@@ -487,10 +166,6 @@ platform :ios do
   desc "Run all code-quality checks (format --lint + lint)"
   desc "Options: fix:true to auto-fix both"
   lane :quality do |options|
-    # Aggregator lanes call the helpers directly rather than
-    # invoking sibling lanes — see comment on `run_swiftformat`
-    # for the Kernel#format collision that made the lane-to-lane
-    # path unusable.
     if options[:fix]
       run_swiftformat(lint: false)
       run_swiftlint(fix: true)
@@ -506,70 +181,13 @@ platform :ios do
   # CI lanes
   # -----------------------------------------------------------------------
 
-  # -----------------------------------------------------------------------
-  # Private release helpers
-  # -----------------------------------------------------------------------
-
-  # Stamp `CFBundleVersion` with a yyyymmddHHMM timestamp. Same
-  # approach Niora uses — every archive gets a unique,
-  # monotonically-increasing build number with zero coordination
-  # between CI jobs and human-run lanes. Defers to the env var so a
-  # CI matrix can force a known value when needed.
-  private_lane :increment_build_number_with_timestamp do
-    build_number = ENV["AVYRA_BUILD_NUMBER"] || Time.now.strftime("%Y%m%d%H%M")
-    increment_build_number(
-      build_number: build_number,
-      xcodeproj: APP_PROJECT
-    )
-  end
-
-  # Refuse to archive from a feature branch — `main` and
-  # `release/*` are the only branches that should produce shippable
-  # builds. Detached HEAD (tag-driven releases) is allowed because
-  # `git_branch` returns an empty / non-matching string and CI sets
-  # `SKIP_BRANCH_CHECK=1` for that flow.
-  private_lane :ensure_release_branch do
-    branch = git_branch
-    valid = ["main", "master"].include?(branch) || branch.start_with?("release/")
-    unless valid
-      UI.user_error!(
-        "Release archives must be cut from main, master, or release/* (current: #{branch}). " \
-        "Pass skip_branch_check:true to override."
-      )
-    end
-  end
-
-  # -----------------------------------------------------------------------
-  # CI shortcuts
-  # -----------------------------------------------------------------------
-
-  desc "CI: archive + upload to TestFlight (internal testers)"
-  lane :ci_testflight do |options|
-    app_upload_testflight(
-      skip_waiting: true,
-      skip_branch_check: ENV["SKIP_BRANCH_CHECK"] ? true : false,
-      changelog: options[:changelog]
-    )
-  end
-
-  desc "CI: archive + upload to App Store (no auto-submit)"
-  lane :ci_release do |options|
-    app_release(
-      skip_branch_check: ENV["SKIP_BRANCH_CHECK"] ? true : false,
-      submit_for_review: options[:submit_for_review] || false,
-      automatic_release: options[:automatic_release] || false
-    )
-  end
-
-  desc "CI: build and test everything (package + app)"
+  desc "CI: build every trait variant + run tests"
   lane :ci_build_test do
-    # Receiver lanes that declare `do |options|` need an explicit
-    # hash so Ruby 3.2+ doesn't refuse the call. Lanes without an
-    # options block (like `package_tests`) accept the empty hash
-    # silently, so passing `{}` everywhere is uniform and safe.
+    package_build
+    package_build_mlx
+    package_build_voice_kokoro
+    package_build_all
     package_tests
-    app_local_build({})
-    app_tests({})
   end
 
   desc "CI: format check + lint"
@@ -586,8 +204,7 @@ platform :ios do
 
   desc "Clear build artifacts"
   lane :clean do
-    in_root("rm -rf .build .swiftpm/.build Apps/AvyraApp/build")
-    clear_derived_data
+    in_root("rm -rf .build .swiftpm/.build")
     UI.success("Build artifacts cleaned")
   end
 end

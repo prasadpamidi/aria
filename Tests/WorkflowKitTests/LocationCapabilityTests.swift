@@ -178,7 +178,7 @@ struct LocationCapabilityTests {
 
     private static func context() -> CapabilityCallContext {
         CapabilityCallContext(
-            callerPluginID: "avyra.builtin.test",
+            callerPluginID: "sdk.builtin.test",
             callerWorkflowID: nil,
             attended: true
         )

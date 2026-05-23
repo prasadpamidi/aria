@@ -29,7 +29,7 @@ struct ServerLLMProviderRoutingTests {
 
         let result = try await runner.run(
             workflow,
-            callerPluginID: "avyra.builtin.test"
+            callerPluginID: "sdk.builtin.test"
         )
 
         #expect(result["spoken_text"] == .string("server"))
@@ -50,7 +50,7 @@ struct ServerLLMProviderRoutingTests {
 
         let result = try await runner.run(
             workflow,
-            callerPluginID: "avyra.builtin.test"
+            callerPluginID: "sdk.builtin.test"
         )
 
         #expect(result["spoken_text"] == .string("default"))
@@ -69,7 +69,7 @@ struct ServerLLMProviderRoutingTests {
 
         let result = try await runner.run(
             workflow,
-            callerPluginID: "avyra.builtin.test"
+            callerPluginID: "sdk.builtin.test"
         )
 
         #expect(result["spoken_text"] == .string("default"))
@@ -121,7 +121,7 @@ struct ServerLLMProviderRoutingTests {
 
         let result = try await runner.run(
             workflow,
-            callerPluginID: "avyra.builtin.test"
+            callerPluginID: "sdk.builtin.test"
         )
 
         #expect(result["spoken_text"] == .string("server"))
@@ -240,7 +240,7 @@ struct LLMProviderPrewarmTests {
             triggers: [.manual]
         )
 
-        _ = try await runner.run(workflow, callerPluginID: "avyra.builtin.test")
+        _ = try await runner.run(workflow, callerPluginID: "sdk.builtin.test")
 
         #expect(provider.prewarmCount == 1)
         #expect(provider.prewarmFiredBeforeGenerate)
@@ -268,7 +268,7 @@ struct LLMProviderPrewarmTests {
             triggers: [.manual]
         )
 
-        let result = try await runner.run(workflow, callerPluginID: "avyra.builtin.test")
+        let result = try await runner.run(workflow, callerPluginID: "sdk.builtin.test")
 
         #expect(result["spoken_text"] == .string("still works"))
         #expect(provider.prewarmCalled)

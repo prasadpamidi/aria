@@ -22,7 +22,8 @@
         init(
             bundle: JSToolBundle,
             httpClient: any HTTPClient,
-            storage: JSToolStorage
+            storage: JSToolStorage,
+            globalName: String
         ) throws {
             self.bundle = bundle
             guard let context = JSContext() else {
@@ -39,12 +40,14 @@
             }
 
             // Build the bridge BEFORE evaluating the tool body so the
-            // body's top-level code (function declarations, module
-            // initialization) can reference `Avyra` if it wants to.
+            // body's top-level code can reference the host global
+            // (the embedder's chosen name — e.g. `Avyra` for the
+            // Avyra app) without a temporal-dead-zone error.
             let builder = JSToolBridgeBuilder(
                 bundle: bundle,
                 httpClient: httpClient,
-                storage: storage
+                storage: storage,
+                globalName: globalName
             )
             builder.install(into: context)
 

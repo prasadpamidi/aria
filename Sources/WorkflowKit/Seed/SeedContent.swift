@@ -2,8 +2,8 @@ import Foundation
 
 // MARK: - SeedContent
 
-/// Discriminated union of every kind of seedable content Avyra
-/// installs on first launch. One mechanism delivers prebuilt
+/// Discriminated union of every kind of seedable content a host
+/// app installs on first launch. One mechanism delivers prebuilt
 /// workflows, JS plugin tools, workflow skeleton templates, and
 /// prompt snippets — every piece can live in the same source
 /// pack ("Daily Essentials", "Health", …) and the installer
@@ -28,8 +28,9 @@ public enum SeedContent: Sendable {
     )
 
     /// First-party JS plugin tool. `bundleData` is the raw
-    /// `.avyra-tool` JSON. The app-side `SeedPluginInstaller`
-    /// routes this to the running `JSToolProvider`.
+    /// plugin JSON (default `.aria-tool`). The app-side
+    /// `SeedPluginInstaller` routes this to the running
+    /// `JSToolProvider`.
     case jsPluginTool(bundleData: Data, name: String)
 
     /// Single prompt snippet — name + body + category. Used
@@ -144,7 +145,7 @@ public protocol SeedPluginInstaller: Sendable {
     /// seeder can skip ones it shouldn't re-install.
     func installedPluginIDs() async -> Set<String>
 
-    /// Install a fresh `.avyra-tool` bundle. The implementation
+    /// Install a fresh plugin bundle (raw JSON). The implementation
     /// is responsible for parsing the JSON, validating the
     /// manifest, and persisting under the user's plugin
     /// directory.

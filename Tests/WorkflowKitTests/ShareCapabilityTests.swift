@@ -87,7 +87,7 @@ struct ShareCapabilityTests {
 
     private static func context(attended: Bool) -> CapabilityCallContext {
         CapabilityCallContext(
-            callerPluginID: "avyra.builtin.test",
+            callerPluginID: "sdk.builtin.test",
             callerWorkflowID: nil,
             attended: attended
         )

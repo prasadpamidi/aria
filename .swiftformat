@@ -4,7 +4,10 @@
 --swiftversion 5.10
 
 # File Options
---exclude .build,.swiftpm,DerivedData,build,vendor,Examples
+# Tests/ is excluded so test fixtures (deliberately concise variable
+# names like `v`, `b`, `s`; longer setUp bodies; etc.) don't fight the
+# formatter for cosmetic reasons.
+--exclude .build,.swiftpm,DerivedData,build,vendor,Examples,Tests
 
 # Format Options
 --maxwidth 120

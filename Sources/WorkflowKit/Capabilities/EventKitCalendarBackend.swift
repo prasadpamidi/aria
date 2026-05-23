@@ -222,9 +222,9 @@
         public var errorDescription: String? {
             switch self {
             case .calendarDenied:
-                "Avyra wasn't granted access to your Calendar."
+                "The app wasn't granted access to your Calendar."
             case .remindersDenied:
-                "Avyra wasn't granted access to your Reminders."
+                "The app wasn't granted access to your Reminders."
             case let .writeFailed(detail):
                 "Couldn't save to your calendar / reminders: \(detail)"
             }

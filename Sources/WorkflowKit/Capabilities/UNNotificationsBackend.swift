@@ -66,7 +66,7 @@ public enum NotificationsError: LocalizedError, Sendable, Equatable {
     public var errorDescription: String? {
         switch self {
         case .permissionDenied:
-            "Avyra wasn't granted permission to schedule notifications."
+            "The app wasn't granted permission to schedule notifications."
         case let .fireAtInPast(date):
             "Notification fire time is in the past: \(date). Use a future time."
         }

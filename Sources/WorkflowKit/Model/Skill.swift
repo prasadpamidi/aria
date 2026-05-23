@@ -22,7 +22,8 @@ import Foundation
 /// `Skill.id` is a stable UUID independent of the human-readable
 /// `name`, so renames don't break workflow references. The
 /// `bundleRelativePath` resolves under the host app's
-/// `Application Support/avyra-skills/` directory.
+/// chosen skills directory (typically
+/// `Application Support/<app>-skills/`).
 public struct Skill: Codable, Identifiable, Hashable, Sendable {
     // MARK: Lifecycle
 
@@ -110,9 +111,9 @@ public struct Skill: Codable, Identifiable, Hashable, Sendable {
 
     public var origin: Origin
 
-    /// Relative path under `avyra-skills/` — typically the
-    /// skill's UUID string for authored / imported, or a
-    /// deterministic slug for downloads.
+    /// Relative path under the host app's skills directory —
+    /// typically the skill's UUID string for authored / imported
+    /// bundles, or a deterministic slug for downloads.
     public var bundleRelativePath: String
 
     /// Optional semver-ish version string. Used by the future

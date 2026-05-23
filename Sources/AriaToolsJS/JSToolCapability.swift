@@ -6,7 +6,7 @@ import Foundation
 /// Capabilities are declared up front in a tool's manifest; the
 /// bridge object inside the tool's `JSContext` is built to bind only
 /// the methods the manifest requested, so a tool that doesn't
-/// declare `.http` literally can't `Avyra.http.get(...)` — the
+/// declare `.http` literally can't `Aria.http.get(...)` — the
 /// property is undefined.
 ///
 /// **Permission-by-construction** rather than runtime checks: an
@@ -16,33 +16,33 @@ import Foundation
 /// and makes accidental misuse impossible (calling an undefined
 /// function in JS throws synchronously).
 public enum JSToolCapability: String, Codable, Sendable, CaseIterable {
-    /// `Avyra.http.get(url)`, `Avyra.http.post(url, body, opts)`.
+    /// `Aria.http.get(url)`, `Aria.http.post(url, body, opts)`.
     /// Routes through the same `HTTPClient` Swift-side `HTTPTool`
     /// uses, so behavior parity is automatic.
     case http
 
-    /// `Avyra.json.parse(text)`, `Avyra.json.stringify(value)`.
+    /// `Aria.json.parse(text)`, `Aria.json.stringify(value)`.
     /// JavaScript has these natively; we expose Aria's `JSONValue`-
     /// safe variants for symmetry with the manifest schema layer.
     case json
 
-    /// `Avyra.clipboard.set(text)`, `Avyra.clipboard.get()`.
+    /// `Aria.clipboard.set(text)`, `Aria.clipboard.get()`.
     /// Reads/writes the system `UIPasteboard.general`.
     case clipboard
 
-    /// `Avyra.share.present({ text, url })`. Pushes a
+    /// `Aria.share.present({ text, url })`. Pushes a
     /// `UIActivityViewController` over the host app's key window.
     /// The tool can't customize the activity types — host policy.
     case share
 
-    /// `Avyra.notify.banner({ title, body })`. Schedules a local
+    /// `Aria.notify.banner({ title, body })`. Schedules a local
     /// `UNUserNotificationCenter` notification with no trigger
     /// (delivered immediately). Requires the host app to have
     /// requested notification authorization.
     case notify
 
-    /// `Avyra.storage.set(key, value)`, `Avyra.storage.get(key)`,
-    /// `Avyra.storage.delete(key)`. Per-tool key-value store backed
+    /// `Aria.storage.set(key, value)`, `Aria.storage.get(key)`,
+    /// `Aria.storage.delete(key)`. Per-tool key-value store backed
     /// by `UserDefaults` under a tool-id-scoped suite name. Tools
     /// can never read another tool's storage.
     case storage

@@ -19,7 +19,15 @@ import Foundation
 public actor CapabilityBroker {
     // MARK: Lifecycle
 
-    public init() { }
+    /// Initialise a broker that treats any caller id beginning
+    /// with `firstPartyCallerPrefix` as a host-shipped workflow
+    /// and skips the scope check for those. Defaults to
+    /// `"sdk.builtin."` so consumers can adopt their own prefix
+    /// (e.g. `"avyra.builtin."`, `"niora.builtin."`) without
+    /// colliding across processes.
+    public init(firstPartyCallerPrefix: String = "sdk.builtin.") {
+        self.firstPartyCallerPrefix = firstPartyCallerPrefix
+    }
 
     // MARK: Public
 
@@ -85,7 +93,7 @@ public actor CapabilityBroker {
         // 3. Scope check. First-party callers (workflows shipped
         // with the app) get an implicit grant; user-installed
         // plugins must have been explicitly granted at install.
-        if !Self.isFirstPartyCaller(callerPluginID) {
+        if !self.isFirstPartyCaller(callerPluginID) {
             let scope = self.matchingScope(
                 pluginID: callerPluginID,
                 capability: id,
@@ -118,17 +126,18 @@ public actor CapabilityBroker {
 
     // MARK: Internal
 
-    /// Caller ids prefixed with `avyra.builtin.` skip the scope
-    /// check — they're shipped-with-the-app workflows. JS plugins
-    /// always use a reverse-DNS bundle id that doesn't collide
+    /// Caller ids beginning with `firstPartyCallerPrefix` skip the
+    /// scope check — they're shipped-with-the-app workflows. JS
+    /// plugins use a reverse-DNS bundle id that doesn't collide
     /// with this prefix, so the check is one string compare and
     /// safe against impersonation.
-    static func isFirstPartyCaller(_ pluginID: String) -> Bool {
-        pluginID.hasPrefix("avyra.builtin.")
+    func isFirstPartyCaller(_ pluginID: String) -> Bool {
+        pluginID.hasPrefix(self.firstPartyCallerPrefix)
     }
 
     // MARK: Private
 
+    private let firstPartyCallerPrefix: String
     private var capabilities: [CapabilityID: any Capability] = [:]
     private var grants: Set<CapabilityScope> = []
 

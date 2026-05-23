@@ -2,11 +2,12 @@ import Aria
 
 /// AriaToolsJS — JavaScript-backed user tool plugin runtime.
 ///
-/// Loads `.avyra-tool` bundles (a single JSON file with embedded JS,
-/// per `JSToolBundle`), instantiates per-tool sandboxed
-/// `JSContext`s, wires a curated `Avyra.*` bridge object based on
-/// each tool's declared capabilities, and vends them to the agent as
-/// `AnyTool`s. The bridge surface is intentionally small — HTTP,
+/// Loads plugin bundles (default extension `.aria-tool`; one JSON
+/// file with embedded JS per `JSToolBundle`), instantiates per-tool
+/// sandboxed `JSContext`s, wires a curated `<global>.*` bridge object
+/// (default global name `Aria`; both configurable per host) based
+/// on each tool's declared capabilities, and vends them to the
+/// agent as `AnyTool`s. The bridge surface is intentionally small — HTTP,
 /// JSON, clipboard, share, notify, storage. Sensitive system
 /// frameworks (HealthKit, Calendar, etc.) are out of scope for v1.
 ///

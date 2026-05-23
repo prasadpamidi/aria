@@ -14,7 +14,9 @@ concurrency:
 jobs:
   # ------------------------------------------------------------------
   # Linux — enforces the platform boundary.
-  # If anyone leaks an Apple framework into `Aria`, this job breaks.
+  # If anyone leaks an Apple framework into `Aria` (the cross-platform
+  # core target), this job breaks. The MLX and VoiceKokoro traits are
+  # Apple-only and not exercised here; the macOS jobs below cover them.
   # ------------------------------------------------------------------
   linux-core:
     name: Linux — Core Build & Test
@@ -48,7 +50,8 @@ jobs:
         run: swift test --filter AriaTests
 
   # ------------------------------------------------------------------
-  # macOS — full build & test of every target including AriaApple.
+  # macOS — full build & test of every target including AriaApple,
+  # AriaMLX, and AriaVoiceKokoro under every trait combination.
   # Driven by Fastlane lanes so the local dev workflow and CI run
   # the exact same commands. See `fastlane/Fastfile` for definitions.
   # ------------------------------------------------------------------
@@ -85,61 +88,17 @@ jobs:
         with:
           bundler-cache: true
 
-      - name: Run root-package build + tests via Fastlane
-        run: bundle exec fastlane package_tests
+      - name: Build all trait variants + run tests via Fastlane
+        # `ci_build_test` invokes `package_build`,
+        # `package_build_mlx`, `package_build_voice_kokoro`,
+        # `package_build_all`, and `package_tests`. Each trait
+        # variant catches regressions specific to that opt-in code
+        # path (mlx-swift-lm strict-concurrency, kokoro-ios fork
+        # platform constraints, etc.).
+        run: bundle exec fastlane ci_build_test
 
       - name: Run CLI demo via Fastlane
         run: bundle exec fastlane cli_demo
-
-      - name: Build + test AriaMLX sub-package
-        # AriaMLX moved to its own SwiftPM package so consumers
-        # (e.g. iOS apps using only FoundationModels) don't pull in
-        # `swift-transformers-mlx` and conflict with WhisperKit's
-        # transitive pin. Build + test it independently. No
-        # Fastlane lane yet because the sub-package has its own
-        # `Package.swift` — kept as a direct `swift test` until the
-        # MLX sub-package gains its own Fastlane wrapper.
-        run: |
-          cd MLX
-          swift build
-          swift test
-
-  # ------------------------------------------------------------------
-  # iOS — build the Avyra app on iOS Simulator (also exercises AriaApple).
-  # Uses the Fastlane lane that local developers run, so any CI-only
-  # surprise is also a local-dev surprise.
-  # ------------------------------------------------------------------
-  ios-app:
-    name: iOS — Avyra Build
-    runs-on: macos-15
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: List installed Xcodes
-        run: ls /Applications | grep -i xcode || true
-
-      - name: Select latest Xcode
-        run: |
-          # Try the newest Xcode available on the runner; the iOS 26 SDK
-          # is required for FoundationModels. We probe candidates in order
-          # of preference and select the first that exists.
-          for xcode in /Applications/Xcode_26*.app /Applications/Xcode-26*.app /Applications/Xcode_latest.app /Applications/Xcode.app; do
-            if [ -d "$xcode" ]; then
-              sudo xcode-select -s "$xcode/Contents/Developer"
-              echo "Selected: $xcode"
-              xcodebuild -version
-              break
-            fi
-          done
-
-      - name: Set up Ruby + bundler (for Fastlane)
-        uses: ruby/setup-ruby@v1
-        with:
-          bundler-cache: true
-
-      - name: Build Avyra for iOS Simulator via Fastlane
-        run: bundle exec fastlane app_local_build
 
   # ------------------------------------------------------------------
   # Quality — SwiftFormat + SwiftLint checks via Fastlane's
@@ -161,13 +120,6 @@ jobs:
           # `trailingSpace` over-eager behaviour on empty lines
           # inside multi-line string literals that 0.61.0 still
           # flags.
-          #
-          # Install path matters: macOS arm64 runners have
-          # /opt/homebrew/bin ahead of /usr/local/bin in PATH, so
-          # we drop the binary directly into the homebrew bin
-          # directory (uninstalling any cached version first) so
-          # `which swiftformat` and `swiftformat --version` pick
-          # up our pinned build.
           brew install swiftlint
           brew uninstall --ignore-dependencies swiftformat 2>/dev/null || true
           curl -fsSL https://github.com/nicklockwood/SwiftFormat/releases/download/0.61.1/swiftformat.zip -o /tmp/swiftformat.zip

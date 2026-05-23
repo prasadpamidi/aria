@@ -13,11 +13,17 @@
 
     // MARK: - JSToolBridgeBuilder
 
-    /// Builds the `Avyra` global inside a freshly-prepared `JSContext`
-    /// based on a bundle's declared capabilities. The builder is the
-    /// single chokepoint between user JS and the outside world — every
-    /// capability the manifest doesn't claim corresponds to a property
-    /// we never assign, so the JS body literally cannot reach it.
+    /// Builds the host-bridge global object inside a freshly-prepared
+    /// `JSContext` based on a bundle's declared capabilities. The
+    /// builder is the single chokepoint between user JS and the
+    /// outside world — every capability the manifest doesn't claim
+    /// corresponds to a property we never assign, so the JS body
+    /// literally cannot reach it.
+    ///
+    /// The JS-side global name (`Avyra`, `Niora`, etc.) is provided
+    /// by the host app via `globalName`. Plugin sources reference
+    /// whichever name the host configured — there is no "default" in
+    /// the runtime itself, only the value the embedder passes.
     ///
     /// Each `bind*` method is a hook a host app can re-implement if it
     /// wants to substitute a different transport (e.g. a vetted HTTP
@@ -29,21 +35,23 @@
         init(
             bundle: JSToolBundle,
             httpClient: any HTTPClient,
-            storage: JSToolStorage
+            storage: JSToolStorage,
+            globalName: String
         ) {
             self.bundle = bundle
             self.httpClient = httpClient
             self.storage = storage
+            self.globalName = globalName
         }
 
         // MARK: Internal
 
-        /// Construct the `Avyra` object and assign it to the JSContext's
-        /// global. After this returns, the user JS can reference `Avyra`
-        /// at top level.
+        /// Construct the host bridge object and assign it to the
+        /// JSContext under `globalName`. After this returns, user JS
+        /// can reference the configured global at top level.
         func install(into context: JSContext) {
-            let avyra: [String: Any] = self.assembleBridge(context: context)
-            context.setObject(avyra, forKeyedSubscript: "Avyra" as NSString)
+            let bridge: [String: Any] = self.assembleBridge(context: context)
+            context.setObject(bridge, forKeyedSubscript: self.globalName as NSString)
         }
 
         // MARK: Private
@@ -51,6 +59,7 @@
         private let bundle: JSToolBundle
         private let httpClient: any HTTPClient
         private let storage: JSToolStorage
+        private let globalName: String
 
         // MARK: - Promise helper
 
@@ -202,7 +211,7 @@
         // MARK: - JSON
 
         /// JavaScript has `JSON.parse` / `JSON.stringify` natively;
-        /// `Avyra.json` exists only as a stable surface so authors who
+        /// `Aria.json` exists only as a stable surface so authors who
         /// learn the bridge by reading examples have one consistent
         /// namespace. Delegates straight through to the JS engine.
         private func bindJSON(context: JSContext) -> [String: Any] {

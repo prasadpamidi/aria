@@ -44,7 +44,7 @@ public enum FocusError: LocalizedError, Sendable, Equatable {
     public var errorDescription: String? {
         switch self {
         case .permissionDenied:
-            "Avyra wasn't granted permission to read Focus state."
+            "The app wasn't granted permission to read Focus state."
         }
     }
 }

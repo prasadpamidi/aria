@@ -149,7 +149,7 @@
                 capabilities: [.http, .json],
                 main: """
                 async function call(input) {
-                    const r = await Avyra.http.get(input.url);
+                    const r = await Aria.http.get(input.url);
                     return { status: r.status, body: r.body };
                 }
                 """
@@ -157,7 +157,8 @@
             let runtime = try JSToolRuntime(
                 bundle: bundle,
                 httpClient: stub,
-                storage: JSToolStorage(toolId: bundle.id)
+                storage: JSToolStorage(toolId: bundle.id),
+                globalName: "Aria"
             )
             let result = try await runtime.invokeJSON(["url": "https://example.com"])
             XCTAssertEqual(result["status"] as? Int, 200)
@@ -166,14 +167,14 @@
 
         func testUndeclaredCapabilityNotBound() async throws {
             // Tools that don't declare `.http` must literally not have
-            // `Avyra.http` available — the test confirms calling it
+            // `Aria.http` available — the test confirms calling it
             // surfaces a JS reference error.
             let bundle = self.bundle(
                 capabilities: [],
                 main: """
                 async function call(input) {
                     try {
-                        Avyra.http.get("https://example.com");
+                        Aria.http.get("https://example.com");
                         return { ok: true };
                     } catch (e) {
                         return { ok: false, error: String(e) };
@@ -197,10 +198,10 @@
                 main: """
                 async function call(input) {
                     if (input.action === "write") {
-                        Avyra.storage.set(input.key, input.value);
+                        Aria.storage.set(input.key, input.value);
                         return { ok: true };
                     }
-                    return { value: Avyra.storage.get(input.key) };
+                    return { value: Aria.storage.get(input.key) };
                 }
                 """
             )
@@ -239,7 +240,8 @@
             try JSToolRuntime(
                 bundle: bundle,
                 httpClient: URLSessionHTTPClient(),
-                storage: JSToolStorage(toolId: bundle.id)
+                storage: JSToolStorage(toolId: bundle.id),
+                globalName: "Aria"
             )
         }
     }

@@ -43,7 +43,7 @@
             let result = try await runner.run(
                 workflow,
                 input: ["value": .integer(7)],
-                callerPluginID: "avyra.builtin.test"
+                callerPluginID: "sdk.builtin.test"
             )
 
             #expect(result["result"] == .string("21"))
@@ -89,14 +89,14 @@
             let resultTrue = try await runner.run(
                 workflow,
                 input: ["flag": .bool(true)],
-                callerPluginID: "avyra.builtin.test"
+                callerPluginID: "sdk.builtin.test"
             )
             #expect(resultTrue["chosen"] == .string("YES"))
 
             let resultFalse = try await runner.run(
                 workflow,
                 input: ["flag": .bool(false)],
-                callerPluginID: "avyra.builtin.test"
+                callerPluginID: "sdk.builtin.test"
             )
             #expect(resultFalse["chosen"] == .string("NO"))
         }

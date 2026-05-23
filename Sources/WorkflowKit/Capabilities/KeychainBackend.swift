@@ -86,7 +86,7 @@ public final class InMemoryKeychainBackend: KeychainBackend, @unchecked Sendable
     public struct SecurityFrameworkKeychain: KeychainBackend {
         // MARK: Lifecycle
 
-        public init(service: String = "so.aria.avyra.secrets") {
+        public init(service: String = "so.aria.workflowkit.secrets") {
             self.service = service
         }
 

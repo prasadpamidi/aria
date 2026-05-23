@@ -1,12 +1,7 @@
-# Fastlane Appfile
-# https://docs.fastlane.tools/advanced/#appfile
+# Fastlane Appfile for Aria — intentionally minimal.
 #
-# Aria is both a Swift package (library, no signing) and the host
-# Avyra app (which ships to App Store / TestFlight). The Appfile
-# scopes the per-app values to the Avyra target so the package
-# lanes stay credential-free.
-
-app_identifier(ENV["AVYRA_BUNDLE_ID"] || "com.3theories.app.Avyra")
-apple_id(ENV["APPLE_ID"]) if ENV["APPLE_ID"]
-team_id(ENV["APPLE_TEAM_ID"] || "259ZX2VB4Z")
-itc_team_id(ENV["APPLE_ITC_TEAM_ID"]) if ENV["APPLE_ITC_TEAM_ID"]
+# Aria is a Swift package and ships no signed app. None of the
+# release lanes in this Fastfile need an Apple ID, App Store
+# Connect API key, or team id. If you're looking for the Avyra
+# app's signing / submission config, see
+# https://github.com/3theories/avyra/blob/main/fastlane/Appfile.

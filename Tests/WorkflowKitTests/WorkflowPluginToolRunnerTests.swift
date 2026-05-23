@@ -37,7 +37,7 @@
             let result = try await Self.makeRunner(broker: broker).run(
                 workflow,
                 input: ["name": .string("ada")],
-                callerPluginID: "avyra.builtin.test"
+                callerPluginID: "sdk.builtin.test"
             )
 
             #expect(result["out"] == .string("hello, ada"))
@@ -74,7 +74,7 @@
                 _ = try await runner.run(
                     workflow,
                     input: [:],
-                    callerPluginID: "avyra.builtin.test"
+                    callerPluginID: "sdk.builtin.test"
                 )
             }
         }
@@ -102,7 +102,7 @@
                 _ = try await Self.makeRunner(broker: broker).run(
                     workflow,
                     input: [:],
-                    callerPluginID: "avyra.builtin.test"
+                    callerPluginID: "sdk.builtin.test"
                 )
             }
         }

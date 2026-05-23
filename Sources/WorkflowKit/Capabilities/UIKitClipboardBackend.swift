@@ -11,7 +11,8 @@
     /// hop to MainActor explicitly to keep behaviour stable.
     ///
     /// iOS 14+: reading the pasteboard shows the user a "Pasted
-    /// from Avyra" toast. No Info.plist key is required.
+    /// from <app>" toast (iOS substitutes the host app name
+    /// automatically). No Info.plist key is required.
     public final class UIKitClipboardBackend: ClipboardBackend, @unchecked Sendable {
         // MARK: Lifecycle
 

@@ -7,7 +7,7 @@ import Foundation
 ///
 ///   * `SKILL.md` — the canonical Anthropic-style file: YAML
 ///     frontmatter (`---` … `---`) followed by markdown body.
-///   * `manifest.json` (optional) — Avyra-specific metadata
+///   * `manifest.json` (optional) — host-side metadata
 ///     (`id`, `origin`, `createdAt`, `enabled`, etc) the
 ///     SKILL.md frontmatter doesn't natively carry. Generated
 ///     on first install; rewritten on every metadata edit.
@@ -45,9 +45,8 @@ public enum SkillBundleReader {
     /// Discover every skill bundle under `rootURL`. Each
     /// immediate subdirectory containing a `SKILL.md` is a
     /// candidate. Subdirectories without that file are
-    /// silently ignored — that matches the JS plugin
-    /// installer's behaviour (`avyra-tools/`) and avoids
-    /// breaking the user with strict error surfaces on
+    /// silently ignored — same lenient pattern the JS plugin
+    /// installer uses, which avoids strict error surfaces on
     /// partially-installed bundles.
     public static func enumerateBundleDirectories(under rootURL: URL) -> [URL] {
         let fileManager = FileManager.default

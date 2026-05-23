@@ -51,9 +51,63 @@ A layer depends only on layers below. See [`docs/architecture.md`](docs/architec
 Sources/
 ├── Aria/                Layers 1–6, platform-agnostic (Linux-buildable)
 ├── AriaTesting/         Mocks and fixtures
-├── AriaApple/           FoundationModels, MLX, SwiftData, sqlite-vec
-└── AriaTools/           Cross-platform tool implementations
+├── AriaApple/           FoundationModels + GRDB-backed memory (Apple-only)
+├── AriaTools/           Cross-platform tool implementations
+├── AriaToolsJS/         JavaScriptCore-sandboxed user plugin runtime
+├── AriaVoice/           Speech.framework STT + AVSpeechSynthesizer TTS
+├── AriaMLX/             MLX-backed LLMProvider (opt-in via `MLX` trait)
+├── AriaVoiceKokoro/     On-device Kokoro 82M TTS (opt-in via `VoiceKokoro` trait)
+└── WorkflowKit/         Workflow runtime + capability broker + skills + plugin steps
 ```
+
+## Traits — opt-in heavy dependencies
+
+Aria exposes two SPM traits (SE-0480, Swift 6.1+) for code paths
+with large transitive dependency graphs:
+
+| Trait | Pulls in | Enables |
+| --- | --- | --- |
+| `MLX` | `mlx-swift-lm`, `swift-huggingface-mlx`, `swift-transformers-mlx` | `AriaMLX` — on-device LLM via MLX |
+| `VoiceKokoro` | `kokoro-ios`, `mlx-swift`, `MLXUtilsLibrary` | `AriaVoiceKokoro` — Kokoro 82M TTS |
+
+Neither trait is on by default. SwiftPM still resolves the
+dependency packages (they appear in `Package.resolved`), but the
+target sources compile to empty unless the matching trait is
+enabled — so the heavy build / link cost only kicks in when a
+consumer actually uses the feature.
+
+Enable from a consumer's `Package.swift`:
+
+```swift
+.package(
+    url: "https://github.com/prasadpamidi/aria.git",
+    from: "0.1.0",
+    traits: ["MLX", "VoiceKokoro"]
+)
+```
+
+Or in an Xcode project's "Add Package Dependency" dialog — tick
+the trait checkboxes when adding Aria.
+
+## Building the SDK
+
+The Fastfile wraps every trait combination:
+
+```bash
+bundle exec fastlane package_build              # default traits
+bundle exec fastlane package_build_mlx          # --traits MLX
+bundle exec fastlane package_build_voice_kokoro # --traits VoiceKokoro
+bundle exec fastlane package_build_all          # --traits MLX,VoiceKokoro
+bundle exec fastlane package_tests              # swift test
+bundle exec fastlane quality                    # swiftformat + swiftlint
+```
+
+## Sibling repos
+
+- **Avyra** — the iOS reference app shipped on the App Store.
+  Repo: <https://github.com/3theories/avyra>. Avyra consumes
+  Aria as a remote SPM dependency with `MLX` + `VoiceKokoro`
+  traits enabled.
 
 ## Quick start
 

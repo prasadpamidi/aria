@@ -130,7 +130,7 @@ struct CapabilityBrokerTests {
             capability: .calendar,
             method: "eventsToday",
             arguments: [:],
-            callerPluginID: "avyra.builtin.dailyBrief"
+            callerPluginID: "sdk.builtin.dailyBrief"
         )
         #expect(result == .object(["echoed": .object([:])]))
     }

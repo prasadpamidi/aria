@@ -48,7 +48,7 @@ struct WorkflowRunnerTests {
 
         let result = try await runner.run(
             workflow,
-            callerPluginID: "avyra.builtin.test"
+            callerPluginID: "sdk.builtin.test"
         )
 
         #expect(result["spoken_text"] == .string("Daily brief: 3 events."))
@@ -84,7 +84,7 @@ struct WorkflowRunnerTests {
         let result = try await runner.run(
             workflow,
             input: ["name": .string("Prasad")],
-            callerPluginID: "avyra.builtin.test"
+            callerPluginID: "sdk.builtin.test"
         )
 
         #expect(result["greeted"] == .string("ack for Prasad"))
@@ -116,7 +116,7 @@ struct WorkflowRunnerTests {
         )
 
         await #expect(throws: (any Error).self) {
-            _ = try await runner.run(workflow, callerPluginID: "avyra.builtin.test")
+            _ = try await runner.run(workflow, callerPluginID: "sdk.builtin.test")
         }
     }
 
@@ -151,7 +151,7 @@ struct WorkflowRunnerTests {
         _ = try await runner.run(
             workflow,
             input: ["path": .string("v1/today")],
-            callerPluginID: "avyra.builtin.test"
+            callerPluginID: "sdk.builtin.test"
         )
 
         // RecordingCapability captures the args it received; we
@@ -171,7 +171,7 @@ struct WorkflowRunnerTests {
 
         let workflow = Workflow(name: "Empty")
         #expect(throws: (any Error).self) {
-            _ = try compiler.compile(workflow, callerPluginID: "avyra.builtin.test")
+            _ = try compiler.compile(workflow, callerPluginID: "sdk.builtin.test")
         }
     }
 }

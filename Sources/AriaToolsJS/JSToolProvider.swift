@@ -5,7 +5,8 @@
 
     // MARK: - JSToolProvider
 
-    /// Discovers installed `.avyra-tool` bundles, instantiates one
+    /// Discovers installed plugin bundles (default extension
+    /// `.aria-tool`; configurable per host), instantiates one
     /// `JSToolRuntime` per bundle, and vends them as `[AnyTool]` to the
     /// agent. Host apps construct one provider and pass `tools()` into
     /// `AgentConfig.tools`.
@@ -20,18 +21,32 @@
         // MARK: Lifecycle
 
         /// - Parameters:
-        ///   - bundlesDirectory: Folder containing `.avyra-tool` files.
-        ///     Host apps typically pass `Application Support/aria-tools/`.
-        ///   - httpClient: Network transport injected into the `Avyra.http`
-        ///     bridge. Default `URLSession.shared`; apps that need to
-        ///     route through their own auth-aware session pass a custom
-        ///     `HTTPClient`.
+        ///   - bundlesDirectory: Folder containing the host app's
+        ///     plugin bundles. Path conventions are up to the
+        ///     embedder.
+        ///   - httpClient: Network transport injected into the
+        ///     `<global>.http` bridge. Default `URLSession.shared`;
+        ///     apps that need to route through their own auth-aware
+        ///     session pass a custom `HTTPClient`.
+        ///   - bundleFileExtension: File extension the runtime
+        ///     recognises when scanning `bundlesDirectory`. Defaults
+        ///     to `"aria-tool"`; hosts that want a branded extension
+        ///     (e.g. `"niora-tool"`) pass it explicitly.
+        ///   - globalName: Name the JS bridge object is bound to on
+        ///     the per-plugin `JSContext` global. Plugin sources
+        ///     reference this name (e.g. `Aria.http.get(...)`).
+        ///     Defaults to `"Aria"`; hosts that want a branded
+        ///     namespace pass it explicitly.
         public init(
             bundlesDirectory: URL,
-            httpClient: any HTTPClient = URLSessionHTTPClient()
+            httpClient: any HTTPClient = URLSessionHTTPClient(),
+            bundleFileExtension: String = "aria-tool",
+            globalName: String = "Aria"
         ) {
             self.bundlesDirectory = bundlesDirectory
             self.httpClient = httpClient
+            self.bundleFileExtension = bundleFileExtension
+            self.globalName = globalName
             self.reload()
         }
 
@@ -104,14 +119,15 @@
                 return
             }
 
-            for url in contents where url.pathExtension == "avyra-tool" {
+            for url in contents where url.pathExtension == self.bundleFileExtension {
                 do {
                     let bundle = try JSToolBundle.load(from: url)
                     let storage = JSToolStorage(toolId: bundle.id)
                     let runtime = try JSToolRuntime(
                         bundle: bundle,
                         httpClient: self.httpClient,
-                        storage: storage
+                        storage: storage,
+                        globalName: self.globalName
                     )
                     self.loaded.append(LoadedTool(
                         bundle: bundle,
@@ -140,7 +156,7 @@
                 withIntermediateDirectories: true
             )
             let destination = self.bundlesDirectory.appendingPathComponent(
-                "\(bundle.id).avyra-tool",
+                "\(bundle.id).\(self.bundleFileExtension)",
                 isDirectory: false
             )
             let data = try bundle.encoded()
@@ -149,10 +165,12 @@
             return bundle
         }
 
-        /// Copy a `.avyra-tool` file into the managed directory and
-        /// reload. The source URL is read once; the destination filename
-        /// is derived from the bundle's `id` so collisions overwrite
-        /// rather than accumulate `Foo 2.avyra-tool` siblings.
+        /// Copy a plugin bundle file (extension matches
+        /// `bundleFileExtension`) into the managed directory and
+        /// reload. The source URL is read once; the destination
+        /// filename is derived from the bundle's `id` so collisions
+        /// overwrite rather than accumulate `Foo 2.aria-tool`
+        /// siblings.
         @discardableResult
         public func install(from sourceURL: URL) throws -> JSToolBundle {
             let bundle = try JSToolBundle.load(from: sourceURL)
@@ -161,7 +179,7 @@
                 withIntermediateDirectories: true
             )
             let destination = self.bundlesDirectory.appendingPathComponent(
-                "\(bundle.id).avyra-tool",
+                "\(bundle.id).\(self.bundleFileExtension)",
                 isDirectory: false
             )
             if FileManager.default.fileExists(atPath: destination.path) {
@@ -190,7 +208,8 @@
             let runtime = try JSToolRuntime(
                 bundle: bundle,
                 httpClient: self.httpClient,
-                storage: storage
+                storage: storage,
+                globalName: self.globalName
             )
             defer {
                 runtime.shutdown()
@@ -230,6 +249,8 @@
 
         private let bundlesDirectory: URL
         private let httpClient: any HTTPClient
+        private let bundleFileExtension: String
+        private let globalName: String
 
         /// Wrap one loaded tool in the closure-based `AnyTool` shape.
         /// Each invocation hands the JSON input straight to the

@@ -8,10 +8,10 @@ import Foundation
 /// something concrete to link and reference even before the full
 /// surface lands.
 ///
-/// The whole `WorkflowKit` surface is rolled out in vertical
-/// slices (see `docs/plans/2026-05-20-avyra-workflows-p0-plan.md`).
-/// Each slice adds another concrete type — for now this file is
-/// intentionally the only non-empty source so the target builds.
+/// The `WorkflowKit` surface is rolled out in vertical slices.
+/// This file serves as the public-API anchor; concrete types
+/// live under `Model/`, `Engine/`, `Capabilities/`, `Storage/`,
+/// and `Seed/`.
 public enum WorkflowKitInfo {
     public static let version = "0.1.0"
 }
