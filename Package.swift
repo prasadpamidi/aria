@@ -152,7 +152,11 @@ let package = Package(
         // tokenizer loading).
         .package(url: "https://github.com/ml-explore/mlx-swift-lm.git", from: "3.31.3"),
         .package(url: "https://github.com/DePasqualeOrg/swift-huggingface-mlx.git", from: "0.2.0"),
-        .package(url: "https://github.com/DePasqualeOrg/swift-transformers-mlx.git", branch: "main"),
+        // Pinned to a tagged release so downstream consumers (Avyra,
+        // Niora, etc.) can pin aria itself by version. SPM rejects a
+        // stable-version pin on a package whose own deps are
+        // branch-tracked.
+        .package(url: "https://github.com/DePasqualeOrg/swift-transformers-mlx.git", from: "0.2.0"),
 
         // Kokoro + Misaki are fetched from the 3theories forks
         // (https://github.com/3theories/kokoro-ios and .../MisakiSwift),
@@ -160,7 +164,11 @@ let package = Package(
         // needed to coexist with AriaMLX's `mlx-swift-lm` 0.31.x pin,
         // plus a resource-bundle-flattening patch for iOS codesign
         // compatibility.
-        .package(url: "https://github.com/3theories/kokoro-ios.git", branch: "main"),
+        // Pinned to a tagged release of the 3theories fork so
+        // downstream consumers can pin aria by version. The fork's
+        // own deps (MisakiSwift, mlx-swift) are now all
+        // version-pinned to satisfy SPM's stable-version rule.
+        .package(url: "https://github.com/3theories/kokoro-ios.git", from: "0.0.1"),
         // mlx-swift is shared by both kokoro-ios and AriaVoiceKokoro's
         // own `import MLX` for `MLXArray`. Independent of mlx-swift-lm.
         .package(url: "https://github.com/ml-explore/mlx-swift", "0.30.0"..<"1.0.0"),
