@@ -22,7 +22,11 @@ jobs:
     name: Linux — Core Build & Test
     runs-on: ubuntu-latest
     container:
-      image: swift:6.1-jammy
+      # Swift 6.2 — required because the `VoiceKokoro` trait's
+      # kokoro-ios fork has `swift-tools-version: 6.2.0` in its
+      # Package.swift, and SPM parses every declared dep's manifest
+      # even when no Linux target consumes it.
+      image: swift:6.2-noble
     steps:
       - name: Checkout
         uses: actions/checkout@v4
