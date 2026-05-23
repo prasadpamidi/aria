@@ -46,17 +46,13 @@ jobs:
       # build on Linux. Aria's core / testing / tools targets don't
       # need either trait.
       - name: Build core target
-        run: swift build --target Aria --traits ""
-
+        run: swift build --target Aria 
       - name: Build testing target
-        run: swift build --target AriaTesting --traits ""
-
+        run: swift build --target AriaTesting 
       - name: Build tools target
-        run: swift build --target AriaTools --traits ""
-
+        run: swift build --target AriaTools 
       - name: Run core tests
-        run: swift test --filter AriaTests --traits ""
-
+        run: swift test --filter AriaTests 
   # ------------------------------------------------------------------
   # macOS — full build & test of every target including AriaApple,
   # AriaMLX, and AriaVoiceKokoro under every trait combination.

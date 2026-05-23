@@ -93,15 +93,20 @@ let package = Package(
         .library(name: "WorkflowKit", targets: ["WorkflowKit"]),
     ],
     traits: [
-        // Default-enabled traits. Apple-platform consumers (the
-        // typical case) get the full MLX + Kokoro surfaces with
-        // zero config. Linux / pure-server consumers turn these
-        // off with `swift build --traits ""` or by passing
-        // `defaultTraits: false, traits: []` from their
-        // Package.swift; aria's own Linux CI uses
-        // `swift build --target Aria` which doesn't pull MLX /
-        // Kokoro into the build graph regardless.
-        .default(enabledTraits: ["MLX", "VoiceKokoro"]),
+        // Both traits are OFF by default so consumers that don't
+        // need MLX or Kokoro (Niora, server-only Linux consumers,
+        // etc.) don't pay any resolution / link cost for them.
+        //
+        // Apple-platform consumers that want the full SDK enable
+        // both explicitly:
+        //
+        //   .package(url: ".../aria.git", from: "0.0.1",
+        //            traits: ["MLX", "VoiceKokoro"])
+        //
+        // Xcode consumers tick the trait checkboxes in the Package
+        // Dependencies dialog. The trait flag is also stored as
+        // `traits = (MLX, VoiceKokoro)` on the
+        // XCRemoteSwiftPackageReference in the pbxproj.
 
         // Pulls in `mlx-swift-lm` 3.x + tokenizer / HF-hub adapters.
         // Apple-Silicon-only at the dep level; the AriaMLX source
