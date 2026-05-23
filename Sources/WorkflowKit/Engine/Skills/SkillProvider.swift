@@ -59,6 +59,11 @@ public final class SkillProvider {
     /// frontmatter doesn't silently vanish the row.
     public private(set) var errors: [LoadError] = []
 
+    /// The on-disk root the provider scans for skill bundles.
+    /// Public so host apps can compose paths relative to it (e.g.
+    /// import sheets, finder reveals) without re-deriving the path.
+    public let bundlesDirectory: URL
+
     /// Look up a skill by id. Linear scan, but the list is
     /// always small (~tens of skills), so a hash map isn't worth
     /// the bookkeeping.
@@ -233,10 +238,6 @@ public final class SkillProvider {
         self.skills = loaded.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         self.errors = encountered
     }
-
-    // MARK: Internal
-
-    let bundlesDirectory: URL
 
     // MARK: Private
 
