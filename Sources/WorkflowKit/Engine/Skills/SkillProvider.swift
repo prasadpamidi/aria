@@ -1,6 +1,8 @@
 import Foundation
 import Observation
-import OSLog
+#if canImport(OSLog)
+    import OSLog
+#endif
 
 // MARK: - SkillProvider
 
@@ -238,10 +240,12 @@ public final class SkillProvider {
 
     // MARK: Private
 
-    private static let log = Logger(
-        subsystem: "com.aria.sdk.workflowkit",
-        category: "SkillProvider"
-    )
+    #if canImport(OSLog)
+        private static let log = Logger(
+            subsystem: "com.aria.sdk.workflowkit",
+            category: "SkillProvider"
+        )
+    #endif
 
     private static func makeSkill(
         from frontmatter: SkillFrontmatter,
