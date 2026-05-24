@@ -53,6 +53,15 @@ public enum SeedCategory: String, Sendable, CaseIterable, Codable {
     case developer
     case creative
     case grocery
+    // v1.2 additions targeted at paying demographics.
+    // `Codable(rawValue:)` is the only on-disk identity that
+    // matters here — keep these raw strings stable forever so
+    // existing seeded workflows in users' stores resolve back
+    // to the correct category after this SDK bump.
+    case sales
+    case students
+    case travel
+    case analytics
 
     // MARK: Public
 
@@ -67,10 +76,18 @@ public enum SeedCategory: String, Sendable, CaseIterable, Codable {
         case .developer: "Developer"
         case .creative: "Creative"
         case .grocery: "Grocery + Pantry"
+        case .sales: "Sales"
+        case .students: "Students"
+        case .travel: "Travel"
+        case .analytics: "Analytics"
         }
     }
 
-    /// SF Symbol used in the gallery section header.
+    /// SF Symbol used in the gallery section header. Consumers
+    /// that ship custom asset packs (e.g. Avyra's Vuesax pack)
+    /// override this with their own mapping; the SF Symbol
+    /// fallback here keeps Niora + any other SDK consumer
+    /// running without a hard dependency on the icon pack.
     public var symbol: String {
         switch self {
         case .dailyEssentials: "sun.max"
@@ -81,6 +98,10 @@ public enum SeedCategory: String, Sendable, CaseIterable, Codable {
         case .developer: "chevron.left.forwardslash.chevron.right"
         case .creative: "sparkles"
         case .grocery: "cart"
+        case .sales: "briefcase"
+        case .students: "graduationcap"
+        case .travel: "airplane"
+        case .analytics: "chart.bar"
         }
     }
 }
