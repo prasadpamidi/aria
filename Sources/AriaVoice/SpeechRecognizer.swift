@@ -309,6 +309,27 @@
                         "[Voice/STT] (bg) inputNode format: sampleRate=\(format.sampleRate) channels=\(format.channelCount) (t+\(Self.elapsed(from: bg0))ms)"
                     )
 
+                // Validate the format BEFORE handing it to
+                // `installTap`. AVAudioEngine raises an Obj-C
+                // exception ("required condition is false: format
+                // != nullptr || ...") when sampleRate or
+                // channelCount is 0, which kills the app rather
+                // than throwing a Swift-catchable error. Format
+                // comes back invalid when the audio session is in
+                // a contested state — the device has Spotify
+                // playing, is on a phone call, paired to a flaky
+                // Bluetooth audio device, etc. Throw a clean
+                // recoverable error here so the caller can show
+                // a "voice mode unavailable" message instead of
+                // crash-reporting back to TestFlight.
+                guard format.sampleRate > 0, format.channelCount > 0 else {
+                    voiceLog
+                        .error(
+                            "[Voice/STT] (bg) invalid input format (sampleRate=\(format.sampleRate) channels=\(format.channelCount)) — aborting before installTap to avoid AVAudioEngine assertion crash"
+                        )
+                    throw VoiceRecognizerError.unavailable
+                }
+
                 inputNode.removeTap(onBus: 0)
                 inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
                     setup.request.append(buffer)
