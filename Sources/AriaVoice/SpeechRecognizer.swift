@@ -137,21 +137,38 @@
             // alert can fire mid-transition and look glitchy.
             try? await Task.sleep(for: .milliseconds(150))
 
-            voiceLog.info("[Voice/STT] requesting speech recognition authorization (t+\(Self.elapsed(from: t0))ms)")
-            // Speech first: that's the surface most likely to be denied
-            // (Apple flags it as a separate prompt from microphone).
-            let speechStatus = await withCheckedContinuation { (continuation: CheckedContinuation<
-                SFSpeechRecognizerAuthorizationStatus,
-                Never
-            >) in
-                SFSpeechRecognizer.requestAuthorization { status in
-                    continuation.resume(returning: status)
+            // Only call `SFSpeechRecognizer.requestAuthorization`
+            // when status is actually `.notDetermined`. On iOS 26.4
+            // calling it with status already `.authorized` trips a
+            // libdispatch queue assertion ("BUG IN CLIENT OF
+            // LIBDISPATCH: Assertion failed: Block was %sexpected
+            // to execute on queue …") because the completion-based
+            // API's internal block dispatches through a queue that
+            // Swift 6 strict concurrency assumes is main. Skipping
+            // the call when not needed avoids the crash entirely.
+            let speechStatus: SFSpeechRecognizerAuthorizationStatus
+            if cachedSpeech == .authorized {
+                speechStatus = .authorized
+                voiceLog
+                    .info("[Voice/STT] speech authorization skipped — already cached as .authorized")
+            } else {
+                voiceLog
+                    .info(
+                        "[Voice/STT] requesting speech recognition authorization (t+\(Self.elapsed(from: t0))ms)"
+                    )
+                speechStatus = await withCheckedContinuation { (continuation: CheckedContinuation<
+                    SFSpeechRecognizerAuthorizationStatus,
+                    Never
+                >) in
+                    SFSpeechRecognizer.requestAuthorization { status in
+                        continuation.resume(returning: status)
+                    }
                 }
+                voiceLog
+                    .info(
+                        "[Voice/STT] speech authorization returned: \(String(describing: speechStatus), privacy: .public) (t+\(Self.elapsed(from: t0))ms)"
+                    )
             }
-            voiceLog
-                .info(
-                    "[Voice/STT] speech authorization returned: \(String(describing: speechStatus), privacy: .public) (t+\(Self.elapsed(from: t0))ms)"
-                )
             switch speechStatus {
             case .authorized:
                 break
@@ -163,11 +180,24 @@
                 return .speechDenied
             }
 
-            voiceLog.info("[Voice/STT] requesting microphone permission (t+\(Self.elapsed(from: t0))ms)")
-            // Mic permission — `AVAudioApplication.requestRecordPermission`
-            // is the iOS 17+ replacement for the deprecated session API.
-            let micGranted = await AVAudioApplication.requestRecordPermission()
-            voiceLog.info("[Voice/STT] microphone permission granted=\(micGranted) (t+\(Self.elapsed(from: t0))ms)")
+            // Same skip-if-already-granted pattern for mic. The
+            // iOS 17+ `requestRecordPermission` is async-native so
+            // less crash-prone than the speech equivalent, but
+            // there's still no reason to call it when the answer
+            // is cached.
+            let micGranted: Bool
+            if cachedMic == .granted {
+                micGranted = true
+                voiceLog.info("[Voice/STT] microphone permission skipped — already cached as .granted")
+            } else {
+                voiceLog
+                    .info("[Voice/STT] requesting microphone permission (t+\(Self.elapsed(from: t0))ms)")
+                micGranted = await AVAudioApplication.requestRecordPermission()
+                voiceLog
+                    .info(
+                        "[Voice/STT] microphone permission granted=\(micGranted) (t+\(Self.elapsed(from: t0))ms)"
+                    )
+            }
             guard micGranted else {
                 return .microphoneDenied
             }
