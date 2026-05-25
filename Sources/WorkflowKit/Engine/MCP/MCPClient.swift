@@ -1,318 +1,288 @@
 import Aria
 import Foundation
+import MCP
 #if canImport(FoundationNetworking)
     import FoundationNetworking
 #endif
 
 // MARK: - MCPClient
 
-/// Minimal MCP (Model Context Protocol) client implementing the
-/// JSON-RPC 2.0 dance over the Streamable HTTP transport. One
-/// instance is bound to a single server endpoint at construction
-/// time; the workflow compiler instantiates it per-step rather
-/// than pooling, which keeps the engine stateless and matches
-/// MCP's session-per-call model for read-mostly tool invocations.
+/// MCP (Model Context Protocol) client bound to a single server
+/// endpoint. One instance is constructed per call site; the workflow
+/// compiler instantiates it per-step rather than pooling, which keeps
+/// the engine stateless and matches MCP's session-per-call model for
+/// read-mostly tool invocations.
 ///
-/// Why not the official `modelcontextprotocol/swift-sdk`?
-/// `WorkflowKit` already keeps a tight dep graph (Aria core +
-/// GRDB + tools); pulling in another network-layer SPM tree for
-/// the three JSON-RPC methods we need (`initialize`,
-/// `notifications/initialized`, `tools/call`) added more surface
-/// than we gained. If P1 needs richer transport support — SSE
-/// streaming, session resumption, multi-tool batches — the API
-/// here is small enough to swap.
+/// Backed by the official `modelcontextprotocol/swift-sdk`
+/// (`HTTPClientTransport` over Streamable HTTP). We hand-rolled this
+/// originally to keep the dep graph tight, but a minimal JSON-only
+/// client only worked against servers we configured ourselves: the
+/// MCP SDKs (TS, Python, Swift) *default to SSE* responses, so a
+/// third-party server we don't control would reply `text/event-stream`
+/// and our `JSONSerialization` parse would throw "couldn't be read".
+/// The official transport parses both SSE and JSON responses, manages
+/// the session, and models every content-block type — that's what
+/// "works against arbitrary servers" actually requires. The SDK's
+/// `MCP` library only adds swift-system + the small `eventsource`
+/// package on top of deps we already carry.
+///
+/// We run with `streaming: false`: the transport still parses an SSE
+/// *response* to our POST (the case that used to break), but does not
+/// open a long-lived GET SSE listener — many servers don't support
+/// that, and one-shot tool calls don't need server-initiated push.
 public struct MCPClient: Sendable {
     // MARK: Lifecycle
 
     public init(
         serverURL: URL,
         credential: MCPCredential? = nil,
-        session: URLSession = .shared,
         clientName: String = "Avyra",
         clientVersion: String = "1.0"
     ) {
         self.serverURL = serverURL
         self.credential = credential
-        self.session = session
         self.clientName = clientName
         self.clientVersion = clientVersion
     }
 
     // MARK: Public
 
-    /// Invoke `toolName` with the supplied arguments. Performs
-    /// the full handshake (`initialize` → `notifications/initialized`
-    /// → `tools/call`) on every call. Returns the concatenated
-    /// text-content blocks the server replied with — the
-    /// canonical MCP shape for textual tool output.
+    /// Invoke `name` with the supplied arguments and return the
+    /// concatenated text-content blocks — the canonical textual tool
+    /// output, and the back-compatible shape every existing caller
+    /// expects. A server-reported error (`isError: true`) re-throws as
+    /// `MCPError.serverError` so the engine surfaces tool-side failures
+    /// the same way as transport ones.
+    ///
+    /// Callers that need the embedded UI resource a tool returns after
+    /// the call (an HTML card, an image, …) should use
+    /// ``callToolDetailed(name:arguments:)`` instead — this method
+    /// drops everything that isn't text, by design, to preserve the
+    /// old return type.
     public func callTool(
         name: String,
         arguments: [String: JSONValue]
     ) async throws -> String {
-        let sessionID = try await self.handshake()
-        let callPayload: [String: Any] = [
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/call",
-            "params": [
-                "name": name,
-                "arguments": Self.toAnyMap(arguments),
-            ],
-        ]
-        let (callData, _) = try await self.postJSON(callPayload, sessionID: sessionID)
-        return try Self.parseToolResult(from: callData)
-    }
-
-    /// Discover which tools the server exposes. Same handshake
-    /// as `callTool`, then POST `tools/list`. The editor's
-    /// "Browse tools" affordance uses this so users don't have
-    /// to copy a tool name out of vendor docs and risk a typo.
-    /// Returns an empty list when the server advertises no
-    /// tools — distinct from a transport failure, which throws
-    /// `MCPError`.
-    public func listTools() async throws -> [MCPToolDescriptor] {
-        let sessionID = try await self.handshake()
-        let listPayload: [String: Any] = [
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "tools/list",
-            "params": [String: Any](),
-        ]
-        let (listData, _) = try await self.postJSON(listPayload, sessionID: sessionID)
-        return try Self.parseToolList(from: listData)
-    }
-
-    // MARK: Private
-
-    /// MCP protocol version we advertise. Pinned so the client
-    /// stays compatible with servers that mid-stream upgrade
-    /// their own protocol — we'll bump deliberately if a new
-    /// version brings a feature we want.
-    private static let protocolVersion = "2025-03-26"
-
-    private let serverURL: URL
-    private let credential: MCPCredential?
-    private let session: URLSession
-    private let clientName: String
-    private let clientVersion: String
-
-    /// Throws when the parsed JSON-RPC envelope contains an
-    /// `error` field. Successful envelopes (with `result`) pass
-    /// through. Bodies with NEITHER are accepted — some servers
-    /// reply to notifications with an empty body or a bare 202.
-    private static func assertJSONRPCSuccess(in data: Data) throws {
-        // 202 Accepted with empty body is a legal MCP response
-        // for notifications. Treat empty as success.
-        guard !data.isEmpty else {
-            return
-        }
-        let envelope = try Self.decodeEnvelope(from: data)
-        if let error = envelope["error"] as? [String: Any] {
-            let code = (error["code"] as? Int) ?? -1
-            let message = (error["message"] as? String) ?? "<no message>"
-            throw MCPError.serverError(code: code, message: message)
-        }
-    }
-
-    /// Pluck the user-visible text out of a `tools/call` reply.
-    /// MCP returns `result.content` as an array of typed blocks;
-    /// we concatenate every `text` block so a multi-block reply
-    /// (rare but legal) still round-trips a usable string.
-    /// `isError: true` re-throws as `MCPError.serverError` so
-    /// the engine surfaces tool-side failures the same way as
-    /// transport ones.
-    private static func parseToolResult(from data: Data) throws -> String {
-        let envelope = try Self.decodeEnvelope(from: data)
-        if let error = envelope["error"] as? [String: Any] {
-            let code = (error["code"] as? Int) ?? -1
-            let message = (error["message"] as? String) ?? "<no message>"
-            throw MCPError.serverError(code: code, message: message)
-        }
-        guard let result = envelope["result"] as? [String: Any] else {
-            throw MCPError.malformedResponse("Missing `result` in tools/call reply.")
-        }
-        if result["isError"] as? Bool == true {
-            let detail = (result["content"] as? [[String: Any]])?
-                .compactMap { $0["text"] as? String }
-                .joined(separator: "\n") ?? "<no detail>"
+        let result = try await self.callToolDetailed(name: name, arguments: arguments)
+        if result.isError {
+            let detail = result.text.isEmpty ? "<no detail>" : result.text
             throw MCPError.serverError(code: -1, message: detail)
         }
-        let blocks = (result["content"] as? [[String: Any]]) ?? []
-        return blocks.compactMap { block -> String? in
-            guard block["type"] as? String == "text" else {
-                return nil
-            }
-            return block["text"] as? String
-        }.joined()
+        return result.text
     }
 
-    /// Pluck the tools array out of a `tools/list` reply. The
-    /// MCP spec says each tool has `name` + optional
-    /// `description` + optional `inputSchema`. Schema is kept
-    /// as raw JSON so callers can render it without modeling
-    /// JSONSchema themselves; if a server omits the schema
-    /// entirely, the descriptor's `inputSchemaJSON` is nil.
-    private static func parseToolList(from data: Data) throws -> [MCPToolDescriptor] {
-        let envelope = try Self.decodeEnvelope(from: data)
-        if let error = envelope["error"] as? [String: Any] {
-            let code = (error["code"] as? Int) ?? -1
-            let message = (error["message"] as? String) ?? "<no message>"
-            throw MCPError.serverError(code: code, message: message)
-        }
-        guard let result = envelope["result"] as? [String: Any] else {
-            throw MCPError.malformedResponse("Missing `result` in tools/list reply.")
-        }
-        let rawTools = (result["tools"] as? [[String: Any]]) ?? []
-        return rawTools.compactMap { entry -> MCPToolDescriptor? in
-            guard let name = entry["name"] as? String, !name.isEmpty else {
-                return nil
-            }
-            let description = entry["description"] as? String
-            var schemaJSON: String?
-            if let schema = entry["inputSchema"] as? [String: Any],
-               let data = try? JSONSerialization.data(
-                   withJSONObject: schema,
-                   options: [.prettyPrinted, .sortedKeys]
-               ),
-               let string = String(data: data, encoding: .utf8) {
-                schemaJSON = string
-            }
-            return MCPToolDescriptor(
+    /// Invoke `name` and return the full result — every content block
+    /// (text, image, audio, embedded resource, resource link) plus the
+    /// server's `isError` flag. This is the path that surfaces a
+    /// `ui://…` HTML resource a tool emits to be rendered post-call:
+    /// `result.firstHTMLResource?.text` is the markup.
+    ///
+    /// Unlike ``callTool(name:arguments:)`` this does *not* throw on
+    /// `isError` — the caller inspects `result.isError` and the error
+    /// content itself, since an erroring tool may still return a
+    /// useful body.
+    public func callToolDetailed(
+        name: String,
+        arguments: [String: JSONValue]
+    ) async throws -> MCPCallResult {
+        try await self.withConnectedClient { client in
+            let (content, isError) = try await client.callTool(
                 name: name,
-                description: description,
-                inputSchemaJSON: schemaJSON
+                arguments: Self.toValueMap(arguments)
+            )
+            return MCPCallResult(
+                content: content.map(Self.mapContent),
+                isError: isError ?? false
             )
         }
     }
 
-    private static func decodeEnvelope(from data: Data) throws -> [String: Any] {
-        // Streamable HTTP servers can reply with either a single
-        // JSON object or an SSE stream. We only POST tools/call
-        // here (which most servers reply to with a single
-        // object); SSE responses are rare for one-shot calls.
-        // If we see SSE framing, surface a malformed-response
-        // error rather than half-parsing it — keeps the
-        // implementation honest.
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            let excerpt = String(data: data, encoding: .utf8)?
-                .prefix(300).description ?? "<binary>"
-            throw MCPError.malformedResponse("Reply wasn't a JSON object. Body: \(excerpt)")
-        }
-        return json
-    }
-
-    /// Convert `[String: JSONValue]` to `[String: Any]` for
-    /// `JSONSerialization`. Mirrors the arg-template lowering
-    /// the workflow compiler does for capability + plugin
-    /// steps.
-    private static func toAnyMap(_ values: [String: JSONValue]) -> [String: Any] {
-        var result: [String: Any] = [:]
-        for (key, value) in values {
-            result[key] = self.toAny(value)
-        }
-        return result
-    }
-
-    private static func toAny(_ value: JSONValue) -> Any {
-        switch value {
-        case let .string(string): string
-        case let .integer(integer): integer
-        case let .number(number): number
-        case let .bool(bool): bool
-        case let .array(array): array.map(self.toAny)
-        case let .object(object): self.toAnyMap(object)
-        case .null: NSNull()
+    /// Discover which tools the server exposes. Drains pagination so a
+    /// server that returns tools across multiple `nextCursor` pages is
+    /// fully enumerated. Returns an empty list when the server
+    /// advertises no tools — distinct from a transport failure, which
+    /// throws `MCPError`.
+    public func listTools() async throws -> [MCPToolDescriptor] {
+        try await self.withConnectedClient { client in
+            var collected: [MCP.Tool] = []
+            var cursor: String?
+            repeat {
+                let (tools, next) = try await client.listTools(cursor: cursor)
+                collected.append(contentsOf: tools)
+                cursor = next
+            } while cursor != nil
+            return collected.map(Self.mapTool)
         }
     }
 
-    private static func attachAuth(
-        to request: inout URLRequest,
+    // MARK: Private
+
+    private let serverURL: URL
+    private let credential: MCPCredential?
+    private let clientName: String
+    private let clientVersion: String
+
+    private static func makeTransport(
+        endpoint: URL,
         credential: MCPCredential?
-    ) {
-        guard let credential else {
-            return
-        }
-        switch credential {
-        case let .bearer(token):
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        case let .basic(username, password):
-            let pair = "\(username):\(password)"
-            guard let data = pair.data(using: .utf8) else {
-                return
+    ) -> MCP.HTTPClientTransport {
+        let authorization = Self.authorizationHeader(for: credential)
+        return MCP.HTTPClientTransport(
+            endpoint: endpoint,
+            streaming: false,
+            requestModifier: { request in
+                guard let authorization else {
+                    return request
+                }
+                var modified = request
+                modified.setValue(authorization, forHTTPHeaderField: "Authorization")
+                return modified
             }
-            let encoded = data.base64EncodedString()
-            request.setValue("Basic \(encoded)", forHTTPHeaderField: "Authorization")
-        }
-    }
-
-    /// Initialize the JSON-RPC session + dispatch the required
-    /// `notifications/initialized`. Returns the optional
-    /// `Mcp-Session-Id` the server may have stamped on the
-    /// initialize response so follow-up requests can pin to
-    /// the same session.
-    private func handshake() async throws -> String? {
-        let initializePayload: [String: Any] = [
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": [
-                "protocolVersion": Self.protocolVersion,
-                "capabilities": [String: Any](),
-                "clientInfo": [
-                    "name": self.clientName,
-                    "version": self.clientVersion,
-                ],
-            ],
-        ]
-        let (initData, initResponse) = try await self.postJSON(
-            initializePayload,
-            sessionID: nil
         )
-        try Self.assertJSONRPCSuccess(in: initData)
-        let sessionID = initResponse.value(forHTTPHeaderField: "Mcp-Session-Id")
-
-        let initialisedPayload: [String: Any] = [
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized",
-            "params": [String: Any](),
-        ]
-        _ = try await self.postJSON(initialisedPayload, sessionID: sessionID)
-        return sessionID
     }
 
-    /// POST a JSON-RPC envelope and return the response body +
-    /// the HTTPURLResponse so the caller can pluck headers
-    /// (notably `Mcp-Session-Id`). Maps non-2xx + transport
-    /// errors into typed `MCPError` cases.
-    private func postJSON(
-        _ body: [String: Any],
-        sessionID: String?
-    ) async throws -> (Data, HTTPURLResponse) {
-        var request = URLRequest(url: self.serverURL)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
-        if let sessionID {
-            request.setValue(sessionID, forHTTPHeaderField: "Mcp-Session-Id")
+    /// Build the `Authorization` header value for a credential.
+    /// `bearer` → `Bearer <token>`; `basic` → RFC 7617
+    /// `Basic <base64(user:pass)>`.
+    private static func authorizationHeader(for credential: MCPCredential?) -> String? {
+        switch credential {
+        case .none:
+            return nil
+        case let .bearer(token):
+            return "Bearer \(token)"
+        case let .basic(username, password):
+            let data = Data("\(username):\(password)".utf8)
+            return "Basic \(data.base64EncodedString())"
         }
-        Self.attachAuth(to: &request, credential: self.credential)
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+    }
 
-        let data: Data
-        let response: URLResponse
+    // MARK: Conversions
+
+    private static func toValueMap(_ values: [String: JSONValue]) -> [String: MCP.Value] {
+        values.mapValues(self.toValue)
+    }
+
+    /// `JSONValue` → the SDK's `Value`. `JSONValue.integer` is `Int64`;
+    /// `Value.int` is `Int` (64-bit on every Apple platform we ship),
+    /// so the cast is lossless in practice.
+    private static func toValue(_ value: JSONValue) -> MCP.Value {
+        switch value {
+        case .null:
+            .null
+        case let .bool(flag):
+            .bool(flag)
+        case let .integer(number):
+            .int(Int(number))
+        case let .number(number):
+            .double(number)
+        case let .string(text):
+            .string(text)
+        case let .array(items):
+            .array(items.map(Self.toValue))
+        case let .object(fields):
+            .object(fields.mapValues(Self.toValue))
+        }
+    }
+
+    /// Map one SDK content block to our `MCPContent`. `@unknown
+    /// default` keeps us forward-compatible: a block type added in a
+    /// future SDK degrades to `.unknown` instead of failing to compile
+    /// or — worse — being silently dropped.
+    private static func mapContent(_ content: MCP.Tool.Content) -> MCPContent {
+        switch content {
+        case let .text(text, _, _):
+            return .text(text)
+        case let .image(data, mimeType, _, _):
+            return .image(data: data, mimeType: mimeType)
+        case let .audio(data, mimeType, _, _):
+            return .audio(data: data, mimeType: mimeType)
+        case let .resource(resource, _, _):
+            return .resource(MCPResourceContent(
+                uri: resource.uri,
+                mimeType: resource.mimeType,
+                text: resource.text,
+                blob: resource.blob
+            ))
+        case let .resourceLink(uri, name, _, _, mimeType, _):
+            return .resourceLink(uri: uri, name: name, mimeType: mimeType)
+        @unknown default:
+            return .unknown(rawType: "unsupported")
+        }
+    }
+
+    private static func mapTool(_ tool: MCP.Tool) -> MCPToolDescriptor {
+        MCPToolDescriptor(
+            name: tool.name,
+            description: tool.description,
+            inputSchemaJSON: self.schemaJSON(tool.inputSchema)
+        )
+    }
+
+    /// Re-serialise the tool's input schema (`Value`) to pretty JSON so
+    /// callers can preview it / decode it into their own JSONSchema.
+    /// A `.null` schema (server omitted one) maps to `nil`, matching
+    /// the descriptor's "no schema" contract.
+    private static func schemaJSON(_ schema: MCP.Value) -> String? {
+        if case .null = schema {
+            return nil
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(schema),
+              let string = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+        return string
+    }
+
+    /// Normalise any thrown error into our `MCPError` taxonomy so the
+    /// Run sheet renders one consistent set of messages regardless of
+    /// whether the failure originated in our code or the SDK.
+    private static func mapError(_ error: Error) -> Error {
+        if let ours = error as? MCPError {
+            return ours
+        }
+        if let sdk = error as? MCP.MCPError {
+            switch sdk {
+            case let .transportError(underlying):
+                return MCPError.networkFailure(underlying.localizedDescription)
+            case .connectionClosed:
+                return MCPError.networkFailure("The MCP server closed the connection.")
+            case let .serverError(code, message):
+                return MCPError.serverError(code: code, message: message)
+            case .parseError:
+                return MCPError.malformedResponse(sdk.errorDescription ?? "Parse error")
+            default:
+                return MCPError.serverError(
+                    code: sdk.code,
+                    message: sdk.errorDescription ?? "MCP protocol error"
+                )
+            }
+        }
+        return MCPError.networkFailure(error.localizedDescription)
+    }
+
+    /// Stand up a fresh SDK client + transport, run the
+    /// initialize handshake, hand the connected client to `body`, then
+    /// tear everything down — on both the success and failure paths so
+    /// the transport's resources don't leak. SDK errors are normalised
+    /// into our `MCPError` so callers see one error taxonomy.
+    private func withConnectedClient<T: Sendable>(
+        _ body: (MCP.Client) async throws -> T
+    ) async throws -> T {
+        let client = MCP.Client(name: self.clientName, version: self.clientVersion)
+        let transport = Self.makeTransport(
+            endpoint: self.serverURL,
+            credential: self.credential
+        )
         do {
-            (data, response) = try await self.session.data(for: request)
+            _ = try await client.connect(transport: transport)
+            let result = try await body(client)
+            await client.disconnect()
+            return result
         } catch {
-            throw MCPError.networkFailure(error.localizedDescription)
+            await client.disconnect()
+            throw Self.mapError(error)
         }
-        guard let http = response as? HTTPURLResponse else {
-            throw MCPError.malformedResponse("Non-HTTP response")
-        }
-        guard (200..<300).contains(http.statusCode) else {
-            let excerpt = String(data: data, encoding: .utf8)?
-                .prefix(500).description ?? "<binary>"
-            throw MCPError.httpStatus(code: http.statusCode, bodyExcerpt: excerpt)
-        }
-        return (data, http)
     }
 }

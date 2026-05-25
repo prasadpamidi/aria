@@ -185,14 +185,28 @@ extension WorkflowCompiler {
     /// (URL parse → credential resolve → arg interpolate →
     /// client.callTool) sequence lives in one place; the two
     /// callers just thread their state through.
+    ///
+    /// `serverURL` and `toolName` are run through the template
+    /// engine alongside `argsTemplate` so workflows can take
+    /// either at runtime via the input schema — without this,
+    /// a step authored as `serverURL: "{{input.serverURL}}"`
+    /// would hit `URL(string:)` with the raw template string
+    /// and fail with `invalidServerURL` even when the user did
+    /// supply a valid URL in the input form.
     static func executeMCPTool(
         step: MCPToolStep,
         state: WorkflowState,
         resolver: MCPCredentialResolver?
     ) async throws -> String {
-        guard let url = URL(string: step.serverURL.trimmingCharacters(in: .whitespaces)),
+        let resolvedServerURL = TemplateInterpolator
+            .render(step.serverURL, bindings: state.bindings)
+            .trimmingCharacters(in: .whitespaces)
+        guard let url = URL(string: resolvedServerURL),
               url.scheme != nil else {
-            throw MCPError.invalidServerURL(step.serverURL)
+            // Surface the post-interpolation value in the error
+            // so the user sees what we actually tried to dial,
+            // not the original `{{input.…}}` template they wrote.
+            throw MCPError.invalidServerURL(resolvedServerURL)
         }
         let credential: MCPCredential?
         if let credentialID = step.credentialID {
@@ -212,8 +226,11 @@ extension WorkflowCompiler {
                 TemplateInterpolator.render(template, bindings: state.bindings)
             )
         }
+        let resolvedToolName = TemplateInterpolator
+            .render(step.toolName, bindings: state.bindings)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let client = MCPClient(serverURL: url, credential: credential)
-        return try await client.callTool(name: step.toolName, arguments: arguments)
+        return try await client.callTool(name: resolvedToolName, arguments: arguments)
     }
 
     func addPluginToolNode(

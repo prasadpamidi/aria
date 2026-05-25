@@ -107,6 +107,43 @@ struct MCPToolStepTests {
     }
 
     @Test
+    func compilerInterpolatesTemplatedServerURLBeforeValidation() async throws {
+        // Regression: `serverURL: "{{input.serverURL}}"` is the
+        // shape skeleton workflows use to take the URL from an
+        // input field. Before this fix, the raw template string
+        // was passed straight to `URL(string:)`, which always
+        // failed — surfacing `MCPError.invalidServerURL("{{input.
+        // serverURL}}")` even when the user had supplied a
+        // valid URL in the run sheet. Verify the engine
+        // interpolates first, and that the error message
+        // (when validation does fail) reflects the resolved
+        // value not the original template — so users see what
+        // was actually attempted.
+        let step = MCPToolStep(
+            serverURL: "{{input.serverURL}}",
+            toolName: "{{input.toolName}}",
+            outputBinding: "result"
+        )
+        do {
+            _ = try await WorkflowCompiler.executeMCPTool(
+                step: step,
+                state: WorkflowState(bindings: [
+                    "input": .object(["serverURL": .string("not a url")]),
+                ]),
+                resolver: nil
+            )
+            Issue.record("Invalid resolved URL should throw")
+        } catch let error as MCPError {
+            // Post-interpolation value, not the raw template,
+            // is what surfaces — confirms render() ran before
+            // URL(string:) validation.
+            #expect(error == .invalidServerURL("not a url"))
+        } catch {
+            Issue.record("Wrong error type: \(error)")
+        }
+    }
+
+    @Test
     func compilerSurfacesMissingCredentialWhenResolverReturnsNil() async throws {
         let credentialID = UUID()
         let step = MCPToolStep(

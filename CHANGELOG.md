@@ -26,6 +26,18 @@ and Aria adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `"avyra.builtin."`) while still bypassing the consent prompt
   for first-party callers. Test fixtures default to
   `"sdk.builtin."`.
+- **MCP tool results now surface every content block**, not just
+  text. `MCPClient.callToolDetailed(name:arguments:)` returns an
+  `MCPCallResult` carrying the full `[MCPContent]` (text, image,
+  audio, embedded resource, resource link) plus the server's
+  `isError` flag. `result.firstHTMLResource` pulls out a `ui://…`
+  HTML card a tool emits to be rendered after the call —
+  previously every non-text block was dropped on the floor. The
+  legacy `callTool(...) -> String` is unchanged.
+- Official **`modelcontextprotocol/swift-sdk`** (`MCP`) is now a
+  `WorkflowKit` dependency, backing `MCPClient`. It adds only
+  swift-system + the small `eventsource` package on top of the
+  existing dependency graph.
 
 ### Changed
 
@@ -44,6 +56,30 @@ and Aria adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The JS global injected into each tool's sandboxed `JSContext`
   is now `Aria.*` (was `Avyra.*`). Pre-release only; no on-disk
   migration shipped to users.
+- **`MCPClient` is rebuilt on the official MCP SDK's
+  `HTTPClientTransport`** instead of a hand-rolled JSON-only
+  client. It parses both SSE and JSON responses, manages the
+  session, drains `tools/list` pagination, and maps the full
+  content-block set — so it works against arbitrary third-party
+  servers, not just ones we configure ourselves. `MCPClient.init`
+  drops its now-unused `session:` parameter.
+
+### Fixed
+
+- **MCP calls against SSE servers no longer fail to parse.** The
+  MCP SDKs default to `text/event-stream` responses; the old
+  hand-rolled client only understood JSON and threw "the data
+  couldn't be read because it isn't in the correct format"
+  against any server we hadn't configured for JSON. The
+  SDK-backed transport parses both framings.
+- **Templated `serverURL` / `toolName` in an MCP workflow step
+  are now interpolated before use.** `executeMCPTool` rendered
+  `argsTemplate` but used `step.serverURL` / `step.toolName` raw,
+  so a step authored as `serverURL: "{{input.serverURL}}"` hit
+  `URL(string:)` with the literal template and failed even when
+  the run sheet supplied a valid URL. Both are rendered against
+  the run's bindings now, and the `invalidServerURL` error
+  reports the resolved value rather than the raw template.
 
 ### Removed
 

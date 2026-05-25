@@ -141,6 +141,15 @@ let package = Package(
         // Persistent memory (chat history + checkpointer) for AriaApple.
         // Apple-only — `Aria` core never imports it.
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.10.0"),
+        // Official Model Context Protocol Swift SDK. Backs `MCPClient`'s
+        // Streamable HTTP transport so the client handles the full
+        // protocol surface — SSE *and* JSON responses, session
+        // management, and every content-block type — against arbitrary
+        // third-party servers we don't control. The `MCP` library target
+        // only pulls swift-system + swift-log (already in our graph) +
+        // the small `eventsource` package; swift-nio is confined to the
+        // SDK's conformance executables, which we don't link.
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.12.0"),
 
         // MARK: - MLX / VoiceKokoro dependencies
 
@@ -353,6 +362,9 @@ let package = Package(
                 // on Linux. Same dep AriaApple already uses; SPM
                 // resolves a single GRDB instance for the package.
                 .product(name: "GRDB", package: "GRDB.swift"),
+                // Official MCP SDK — backs `MCPClient`. See the package
+                // dependency note above for why this is a thin add.
+                .product(name: "MCP", package: "swift-sdk"),
             ],
             path: "Sources/WorkflowKit"
         ),
