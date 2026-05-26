@@ -1,5 +1,12 @@
 # Aria
 
+[![CI](https://github.com/prasadpamidi/aria/actions/workflows/ci.yml/badge.svg)](https://github.com/prasadpamidi/aria/actions/workflows/ci.yml)
+[![Swift](https://img.shields.io/badge/Swift-6.1+-F05138?logo=swift&logoColor=white)](https://swift.org)
+[![Platforms](https://img.shields.io/badge/Platforms-iOS%2018%2B%20%7C%20macOS%2015%2B%20%7C%20Linux-lightgrey)](https://github.com/prasadpamidi/aria/blob/main/Package.swift)
+[![SPM compatible](https://img.shields.io/badge/SPM-compatible-brightgreen?logo=swift)](https://github.com/prasadpamidi/aria/blob/main/Package.swift)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/prasadpamidi/aria?include_prereleases&sort=semver&label=latest)](https://github.com/prasadpamidi/aria/releases)
+
 **Composable on-device + remote agent runtime for Apple platforms.**
 
 Aria is a Swift library for building agent-driven applications. The

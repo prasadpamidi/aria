@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Discussion / question
+    url: https://github.com/prasadpamidi/aria/discussions
+    about: Architecture questions, "how do I…" threads, design tangents.
+  - name: 🔒 Security report
+    url: https://github.com/prasadpamidi/aria/blob/main/SECURITY.md
+    about: Found a vulnerability? Read SECURITY.md before filing — most reports go to security@ instead of a public issue.
+  - name: 📦 Avyra app
+    url: https://github.com/prasadpamidi/avyra
+    about: Aria is the SDK; Avyra is the iOS / iPadOS app built on it. App-specific bugs (chat UI, App Store install, settings flow) belong over there.
