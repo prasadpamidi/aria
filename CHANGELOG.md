@@ -7,8 +7,29 @@ and Aria adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-26
+
 ### Added
 
+- **`AgentKit` target** — reusable agents layer alongside
+  `WorkflowKit`. Codable `AgentDefinition` (system prompt,
+  model routing, tool allowlists, approval policy, triggers,
+  suggested actions), JSON-file `AgentStore` / `AgentRunStore`,
+  capability→tool bridging, `ProposeTool` + `AgentApprovalSink`
+  for human-in-the-loop side-effecting actions, checkpoint
+  middleware, in-loop validator with retry cap, and a
+  generalized `AgentCompiler` / `AgentRuntime` taking two
+  injected closures (`AgentExtraToolsProvider` for the host's
+  MCP / workflow / plugin / skill-load tools and
+  `AgentProviderFactory` for LLM routing).
+  `AgentCompiler.currentDateAnchor()` injects the current date
+  into every system prompt so models can't invent dates.
+  `AgentCatalog` + `AgentPersona` provide the catalogue
+  grouping persona buckets (For Your Day / Research /
+  Communication / etc.) hosts surface in their UI.
+  Apple-only; each consumer (avyra, niora) injects its own
+  provider routing and extra tool sources so the runtime
+  stays app-agnostic.
 - **SPM traits** (SE-0480) gate the two heaviest dependency
   graphs. `MLX` enables the `AriaMLX` target (pulls in
   `mlx-swift-lm`); `VoiceKokoro` enables the `AriaVoiceKokoro`

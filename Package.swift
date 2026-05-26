@@ -91,6 +91,16 @@ let package = Package(
         // `#if canImport(…)` guards so the target compiles empty
         // on Linux.
         .library(name: "WorkflowKit", targets: ["WorkflowKit"]),
+
+        // Reusable agents layer — Codable `AgentDefinition` + JSON
+        // persistence + a tool-calling agent compiler/runtime built on
+        // Aria's Agent loop, plus checkpoint / human-in-the-loop
+        // approval primitives. Leans on AriaApple's FoundationModels
+        // tools and WorkflowKit's `CapabilityBroker` + skills.
+        // Apple-only. Each consumer (avyra, niora) injects its own
+        // provider routing and extra tool sources (MCP / workflows /
+        // plugins) so the runtime stays app-agnostic.
+        .library(name: "AgentKit", targets: ["AgentKit"]),
     ],
     traits: [
         // Both traits are OFF by default so consumers that don't
@@ -367,6 +377,16 @@ let package = Package(
                 .product(name: "MCP", package: "swift-sdk"),
             ],
             path: "Sources/WorkflowKit"
+        ),
+
+        .target(
+            name: "AgentKit",
+            dependencies: [
+                "Aria",
+                "AriaApple",
+                "WorkflowKit",
+            ],
+            path: "Sources/AgentKit"
         ),
 
         // MARK: - Test targets
