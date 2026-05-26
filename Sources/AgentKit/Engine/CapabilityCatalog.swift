@@ -170,19 +170,30 @@ public enum CapabilityCatalog {
             CapabilityMethod(
                 name: "schedule",
                 summary: "Schedule a local notification at a specific date.",
-                // Broker requires `fireAt` (ISO-8601). Previous
-                // hint said `date` which was stale — the model
-                // would emit `date` and the broker rejected the
-                // call with `expected: fireAt`. Aligned now.
-                argHint: "{\"title\": string, \"body\": string, \"fireAt\": ISO-8601 datetime in the future}",
+                // `fireAt` accepts a naïve datetime (preferred —
+                // no `Z`, no offset) interpreted in the user's
+                // local timezone, OR a full ISO-8601 string
+                // matching the offset shown in the system prompt
+                // date anchor. NEVER use `Z` (UTC) — it shifts
+                // the scheduled time by the local offset.
+                argHint: """
+                {"title": string, "body": string, "fireAt": naïve local datetime like "YYYY-MM-DDTHH:MM:SS" \
+                (no `Z`, no offset — host resolves in user's local timezone). \
+                Must be in the future.}
+                """,
                 isSideEffecting: true
             ),
             CapabilityMethod(
                 name: "scheduleIn",
                 summary: "Schedule a local notification after a delay.",
-                // Real broker arg is `secondsFromNow` (positive int),
-                // not `seconds`. Aligned with `NotificationsCapability`.
-                argHint: "{\"title\": string, \"body\": string, \"secondsFromNow\": positive integer}",
+                // `secondsFromNow` sidesteps the whole timezone
+                // problem — recommend it to the model whenever
+                // the user said "in N minutes / N hours" rather
+                // than naming a wall-clock time.
+                argHint: """
+                {"title": string, "body": string, "secondsFromNow": positive integer (delay from now in seconds — \
+                prefer this over `schedule` when the user said "in N minutes/hours" rather than a specific clock time)}
+                """,
                 isSideEffecting: true
             ),
             CapabilityMethod(

@@ -39,6 +39,54 @@ struct NotificationsCapabilityTests {
     }
 
     @Test
+    func scheduleAcceptsNaiveDatetimeAsLocalTime() async throws {
+        // Small LLMs routinely emit `fireAt` as a naïve
+        // datetime — no `Z`, no offset — when scheduling
+        // a notification from an "at 6pm" intent. The
+        // permissive parser must resolve those in the user's
+        // local timezone so the alert fires at the wall-clock
+        // time the user actually meant. Regression test for
+        // the bug where strict ISO parsing rejected the
+        // naïve shape, forcing the model to emit `Z` and
+        // accidentally schedule in UTC.
+        let backend = InMemoryNotificationsBackend()
+        let capability = NotificationsCapability(backend: backend)
+
+        // Build a naïve datetime ~1 hour from now, in local time.
+        let target = Date().addingTimeInterval(3600)
+        let naive = DateFormatter()
+        naive.locale = Locale(identifier: "en_US_POSIX")
+        naive.timeZone = TimeZone.current
+        naive.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        let naiveString = naive.string(from: target)
+        // Sanity-check the shape — must NOT end in Z and
+        // must NOT contain a timezone offset.
+        #expect(!naiveString.hasSuffix("Z"))
+        #expect(!naiveString.contains("+"))
+
+        _ = try await capability.call(
+            method: "schedule",
+            arguments: [
+                "title": .string("Local naïve"),
+                "body": .string("should fire at local 6pm not UTC 6pm"),
+                "fireAt": .string(naiveString),
+                "identifier": .string("naive-local"),
+            ],
+            context: Self.context()
+        )
+
+        let pending = await backend.pendingNotifications()
+        #expect(pending.count == 1)
+        if let first = pending.first {
+            // Must resolve within a couple seconds of the
+            // intended target (truncation of sub-second
+            // fractions accounts for the tiny slack).
+            let delta = abs(first.fireAt.timeIntervalSince(target))
+            #expect(delta < 2.0)
+        }
+    }
+
+    @Test
     func scheduleRejectsPastFireAt() async throws {
         let backend = InMemoryNotificationsBackend()
         let capability = NotificationsCapability(backend: backend)

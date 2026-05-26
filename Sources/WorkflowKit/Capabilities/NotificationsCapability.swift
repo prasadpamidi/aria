@@ -61,11 +61,69 @@ public actor NotificationsCapability: Capability {
 
     static let allMethods: Set<String> = ["schedule", "scheduleIn", "cancel", "pending"]
 
+    /// Resolve a `fireAt` argument to an absolute `Date`. Tries
+    /// the permissive ISO-8601 paths first (full timezone-bearing
+    /// form, fractional seconds), then falls back to two naïve
+    /// shapes interpreted in the user's local timezone. Returns
+    /// `nil` if no parser matches — callers throw
+    /// `invalidArguments` in that case.
+    static func parseFireAt(_ raw: String) -> Date? {
+        if let date = self.iso8601Formatter.date(from: raw) {
+            return date
+        }
+        if let date = self.iso8601FractionalFormatter.date(from: raw) {
+            return date
+        }
+        if let date = self.naiveDateTimeFormatter.date(from: raw) {
+            return date
+        }
+        if let date = self.naiveDateTimeNoSecondsFormatter.date(from: raw) {
+            return date
+        }
+        return nil
+    }
+
     // MARK: Private
 
     private static nonisolated(unsafe) let iso8601Formatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
+        return formatter
+    }()
+
+    /// Same as `iso8601Formatter` but also accepts fractional
+    /// seconds (`…00:00.000Z`). Tried second.
+    private static nonisolated(unsafe) let iso8601FractionalFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    /// Local-timezone parser for naïve datetimes (no `Z`, no
+    /// offset). Small LLMs frequently emit `fireAt` as
+    /// `"2026-05-26T18:00:00"` when they mean "6pm in the user's
+    /// timezone." Without this fallback, the strict ISO parser
+    /// rejects the string and the broker throws
+    /// `invalidArguments`, even though the model's intent was
+    /// clear. With it, we resolve the wall-clock time in
+    /// `TimeZone.current` — the behaviour users expect when an
+    /// agent says "I'll remind you at 6pm."
+    private static nonisolated(unsafe) let naiveDateTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone.current
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+        return formatter
+    }()
+
+    /// Naïve datetime without seconds — `2026-05-26T18:00`.
+    /// Same local-time interpretation as the seconds-bearing
+    /// variant. Tried after the fractional + plain ISO parsers.
+    private static nonisolated(unsafe) let naiveDateTimeNoSecondsFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone.current
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm"
         return formatter
     }()
 
@@ -160,10 +218,17 @@ public actor NotificationsCapability: Capability {
         let title = try Self.requireStringArg("title", from: arguments, method: "schedule")
         let body = try Self.requireStringArg("body", from: arguments, method: "schedule")
         let fireAtISO = try Self.requireStringArg("fireAt", from: arguments, method: "schedule")
-        guard let fireAt = Self.iso8601Formatter.date(from: fireAtISO) else {
+        // `parseFireAt` is permissive: full ISO-8601 with offset
+        // OR `Z` is honoured as-is; a naïve datetime
+        // (`2026-05-26T18:00:00`, no timezone) is interpreted in
+        // the user's local timezone. The naïve path is what
+        // makes small-LLM-driven agents reliable — they
+        // routinely emit `fireAt` without the offset shown in
+        // the date anchor.
+        guard let fireAt = Self.parseFireAt(fireAtISO) else {
             throw CapabilityError.invalidArguments(
                 method: "schedule",
-                expected: "ISO-8601 fireAt",
+                expected: "ISO-8601 fireAt (with timezone, or naïve interpreted as local)",
                 actual: fireAtISO
             )
         }

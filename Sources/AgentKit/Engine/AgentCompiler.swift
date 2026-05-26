@@ -88,10 +88,19 @@ import WorkflowKit
         private static let windowMaxTurns = 24
         private static let windowMaxTokens = 3000
 
-        /// `Current date: YYYY-MM-DD. Current time: HH:MM <tz>.`
-        /// Pinned at compile time (right when the agent boots
-        /// to handle a turn) so it reflects the moment the user
-        /// asked, not the moment the bundle shipped.
+        /// Stamped at the top of every system prompt right when
+        /// the agent boots to handle a turn so it reflects the
+        /// moment the user asked, not the moment the bundle
+        /// shipped. The block is deliberately verbose about
+        /// timezone semantics — small on-device LLMs were
+        /// observed emitting `fireAt` strings ending in `Z`
+        /// (UTC) even when the prompt clearly stated the local
+        /// timezone, which shifts the scheduled fire time by
+        /// the UTC offset (e.g. `18:00Z` fires at 11am local in
+        /// `America/Los_Angeles`). The anchor now teaches the
+        /// model two safe shapes — naïve ISO (no `Z`, no offset
+        /// → host parses as local) and offset-bearing ISO using
+        /// the EXACT string shown — and explicitly bans `Z`.
         private static func currentDateAnchor() -> String {
             let now = Date()
             let dateFormatter = DateFormatter()
@@ -105,11 +114,31 @@ import WorkflowKit
             let iso = ISO8601DateFormatter()
             iso.formatOptions = [.withInternetDateTime]
             iso.timeZone = TimeZone.current
+            let naive = DateFormatter()
+            naive.dateFormat = "yyyy-MM-dd'T'HH:mm:ss"
+            naive.locale = Locale(identifier: "en_US_POSIX")
+            naive.timeZone = TimeZone.current
+
+            let nowLocal = naive.string(from: now)
+            let nowOffset = iso.string(from: now)
+            let plusOneHour = naive.string(from: now.addingTimeInterval(3600))
+            let tzID = TimeZone.current.identifier
+
             return """
-            Current date: \(dateFormatter.string(from: now)) (\(timeFormatter.string(from: now)) \(TimeZone.current
-                .identifier))
-            Current ISO-8601 instant: \(iso.string(from: now))
-            When you emit ISO-8601 datetimes, base them on the values above. Never schedule anything for a date in the past.
+            Current date: \(dateFormatter.string(from: now)) (\(timeFormatter.string(from: now)) \(tzID))
+            Current local datetime: \(nowLocal)
+            Current ISO-8601 instant (with offset): \(nowOffset)
+
+            When you emit a datetime (e.g. `fireAt` for a reminder/notification), use ONE of these shapes:
+
+              1. Local naïve datetime, no timezone suffix — the host interprets it in \(tzID).
+                 Example: one hour from now is exactly `\(plusOneHour)`.
+              2. ISO-8601 with the EXACT offset shown above — copy the suffix from the line above verbatim.
+                 Example: right now is `\(nowOffset)`.
+
+            DO NOT append `Z` to a datetime. `Z` means UTC and will fire at the wrong wall-clock time. \
+            DO NOT invent a different offset (e.g. `+00:00`, `-05:00`) unless the user explicitly asks for it.
+            Never schedule anything for a date or time in the past.
             """
         }
 

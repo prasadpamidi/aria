@@ -7,6 +7,34 @@ and Aria adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-26
+
+### Fixed
+
+- **Notification `fireAt` no longer fires at the wrong wall-clock
+  time when an agent schedules it.** Small on-device LLMs were
+  observed emitting `fireAt` strings ending in `Z` (UTC) even
+  when the system prompt clearly stated the user's local
+  timezone, which shifted the scheduled fire time by the UTC
+  offset (e.g. `18:00Z` fires at 11am local in
+  `America/Los_Angeles`). Three layers landed:
+  - `NotificationsCapability.parseFireAt(_:)` is now permissive:
+    accepts the existing ISO-8601-with-timezone form, ISO-8601
+    with fractional seconds, AND naïve datetimes
+    (`2026-05-26T18:00:00`) which it resolves in `TimeZone.current`.
+    The naïve shape is the safest contract for a model — no
+    timezone for it to get wrong.
+  - `AgentCompiler.currentDateAnchor()` (the block prepended to
+    every system prompt) now teaches the model two safe shapes
+    with concrete examples ("one hour from now is exactly
+    `<naive local datetime>`") and explicitly bans `Z`.
+  - Notification tool `argHint`s in `CapabilityCatalog` now
+    spell out the naïve-local format and recommend `scheduleIn`
+    with `secondsFromNow` whenever the user said "in N minutes"
+    rather than naming a clock time.
+- Regression test `scheduleAcceptsNaiveDatetimeAsLocalTime`
+  in `NotificationsCapabilityTests` locks the behaviour in.
+
 ## [0.1.0] - 2026-05-26
 
 ### Added
