@@ -1,5 +1,6 @@
 import Aria
 import Foundation
+import Logging
 import WorkflowKit
 
 #if canImport(FoundationModels)
@@ -69,7 +70,9 @@ import WorkflowKit
                 // (host trying to re-wire stores at runtime,
                 // tests forgetting to reset, etc). Log so the
                 // silent-ignore doesn't hide a wiring mistake.
-                print("[AGENT] AgentRuntime.boot called after first boot — ignored. First-boot wiring still in effect.")
+                self.logger.warning(
+                    "AgentRuntime.boot called after first boot — ignored. First-boot wiring still in effect."
+                )
                 return
             }
             let compiler = AgentCompiler(
@@ -103,7 +106,7 @@ import WorkflowKit
                 return
             }
             for run in runs where run.status == .running {
-                print("[AGENT] boot.sweep orphaned runID=\(run.id) — marking failed")
+                Self.logger.info("boot.sweep orphaned runID=\(run.id) — marking failed")
                 _ = try? runStore.update(id: run.id) { row in
                     row.status = .failed
                     if (row.outputSummary ?? "").isEmpty {
@@ -120,8 +123,8 @@ import WorkflowKit
             attended: Bool,
             threadId: String? = nil
         ) -> AsyncThrowingStream<AgentRunEvent, any Error> {
-            print(
-                "[AGENT] runStreaming agentID=\(agentID) input=\"\(input)\" attended=\(attended) threadId=\(threadId ?? "(new)")"
+            Self.logger.info(
+                "runStreaming agentID=\(agentID) input=\"\(input)\" attended=\(attended) threadId=\(threadId ?? "(new)")"
             )
             return AsyncThrowingStream { continuation in
                 let task = Task { @MainActor in
@@ -129,15 +132,17 @@ import WorkflowKit
                         guard let definition = try self.store.load(id: agentID) else {
                             throw AgentRuntimeError.agentNotFound(agentID)
                         }
-                        print(
-                            "[AGENT] runStreaming loaded definition name=\(definition.name) policy=\(definition.approvalPolicy)"
+                        Self.logger.debug(
+                            "runStreaming loaded definition name=\(definition.name) policy=\(definition.approvalPolicy)"
                         )
                         let record = try self.runStore.create(
                             agentID: agentID,
                             inputSummary: input,
                             threadId: threadId
                         )
-                        print("[AGENT] runStreaming created runID=\(record.id) threadId=\(record.threadId)")
+                        Self.logger.info(
+                            "runStreaming created runID=\(record.id) threadId=\(record.threadId)"
+                        )
                         continuation.yield(.runStarted(runID: record.id))
                         let sink = AgentApprovalSink()
                         let agent = self.compiler.compile(
@@ -180,7 +185,9 @@ import WorkflowKit
             runID: UUID,
             approval: ApprovalResolution? = nil
         ) -> AsyncThrowingStream<AgentRunEvent, any Error> {
-            print("[AGENT] resumeStreaming runID=\(runID) approval=\(approval.map(String.init(describing:)) ?? "nil")")
+            Self.logger.info(
+                "resumeStreaming runID=\(runID) approval=\(approval.map(String.init(describing:)) ?? "nil")"
+            )
             return AsyncThrowingStream { continuation in
                 let task = Task { @MainActor in
                     do {
@@ -191,8 +198,8 @@ import WorkflowKit
                             throw AgentRuntimeError.agentNotFound(record.agentID)
                         }
                         let nudge = Self.resumeNudge(record: record, approval: approval)
-                        print(
-                            "[AGENT] resumeStreaming nudge=\"\(nudge)\" status=\(record.status) pendingKind=\(record.pendingProposal?.kind ?? "nil")"
+                        Self.logger.debug(
+                            "resumeStreaming nudge=\"\(nudge)\" status=\(record.status) pendingKind=\(record.pendingProposal?.kind ?? "nil")"
                         )
                         continuation.yield(.runStarted(runID: record.id))
                         _ = try? self.runStore.update(id: runID) { row in
@@ -242,6 +249,19 @@ import WorkflowKit
         }
 
         // MARK: Private
+
+        /// `swift-log` Logger — replaces the old `print("[AGENT] ...")`
+        /// debug spam that polluted production stdout. The label
+        /// matches Aria's `com.aria.<target>.<role>` namespace
+        /// so hosts can selectively quiet AgentKit logs via
+        /// `LoggingSystem.bootstrap` without touching workflow /
+        /// core / chat logs.
+        ///
+        /// `nonisolated(unsafe)` because `Logger` is value-typed and
+        /// internally thread-safe (writes go through the configured
+        /// `LogHandler`); but Swift 6 strict concurrency flags a
+        /// static let unless we say so.
+        private static nonisolated(unsafe) let logger = Logger(label: "com.aria.agentkit.runtime")
 
         private let chatHistory: any ChatHistory
         private let compiler: AgentCompiler
@@ -346,42 +366,44 @@ import WorkflowKit
             isPostApprove: Bool,
             continuation: AsyncThrowingStream<AgentRunEvent, any Error>.Continuation
         ) async throws {
-            print("[AGENT] drive START runID=\(runID) isPostApprove=\(isPostApprove)")
+            Self.logger.debug("drive START runID=\(runID) isPostApprove=\(isPostApprove)")
             var output = ""
             var finishReason: FinishReason = .endTurn
             do {
                 for try await event in agent.stream(input) {
                     switch event {
                     case .userMessageReceived:
-                        print("[AGENT] event userMessageReceived")
+                        Self.logger.trace("event userMessageReceived")
                     case let .stepStart(index):
-                        print("[AGENT] event stepStart index=\(index)")
+                        Self.logger.trace("event stepStart index=\(index)")
                         continuation.yield(.stepStart(index))
                     case .assistantStart:
-                        print("[AGENT] event assistantStart")
+                        Self.logger.trace("event assistantStart")
                         continuation.yield(.assistantStart)
                     case let .textDelta(delta):
                         output += delta
                         continuation.yield(.textDelta(delta))
                     case let .toolCallRequested(call):
-                        print("[AGENT] event toolCallRequested name=\(call.name) id=\(call.id) args=\(call.arguments)")
+                        Self.logger.debug(
+                            "event toolCallRequested name=\(call.name) id=\(call.id) args=\(call.arguments)"
+                        )
                         continuation.yield(.toolCallRequested(call))
                     case let .toolExecutionStart(callId):
-                        print("[AGENT] event toolExecutionStart callId=\(callId)")
+                        Self.logger.trace("event toolExecutionStart callId=\(callId)")
                         continuation.yield(.toolExecutionStart(callId: callId))
                     case let .toolExecutionEnd(callId, result):
-                        print(
-                            "[AGENT] event toolExecutionEnd callId=\(callId) isError=\(result.isError) output=\(result.output)"
+                        Self.logger.debug(
+                            "event toolExecutionEnd callId=\(callId) isError=\(result.isError) output=\(result.output)"
                         )
                         continuation.yield(.toolExecutionEnd(callId: callId, result: result))
                     case let .stepEnd(index):
-                        print("[AGENT] event stepEnd index=\(index) sinkHasProposal=\(sink.proposal != nil)")
+                        Self.logger.trace("event stepEnd index=\(index) sinkHasProposal=\(sink.proposal != nil)")
                         continuation.yield(.stepEnd(index))
                     case let .finish(reason):
-                        print("[AGENT] event finish reason=\(reason)")
+                        Self.logger.debug("event finish reason=\(reason)")
                         finishReason = reason
                     case let .error(error):
-                        print("[AGENT] event error \(error)")
+                        Self.logger.error("event error \(error)")
                         throw error
                     }
                 }
@@ -395,7 +417,7 @@ import WorkflowKit
                 // `recoverOrphanedRuns` will clean up any
                 // record still stuck in `.running` next launch.
                 if error is CancellationError {
-                    print("[AGENT] drive CANCELLED runID=\(runID) — leaving rescue paths untouched")
+                    Self.logger.info("drive CANCELLED runID=\(runID) — leaving rescue paths untouched")
                     return
                 }
                 // Sink-first: if a proposal was already recorded
@@ -408,9 +430,11 @@ import WorkflowKit
                 // a perfectly good proposal that was already in the
                 // sink.
                 let hasProposal = sink.proposal != nil
-                print("[AGENT] drive CAUGHT error=\(Self.describe(error)) hasProposal=\(hasProposal)")
+                Self.logger.warning(
+                    "drive CAUGHT error=\(Self.describe(error)) hasProposal=\(hasProposal)"
+                )
                 if let proposal = sink.proposal {
-                    print("[AGENT] drive RESCUE proposal-after-error kind=\(proposal.kind)")
+                    Self.logger.info("drive RESCUE proposal-after-error kind=\(proposal.kind)")
                     _ = try? self.runStore.update(id: runID) { row in
                         row.status = .awaitingApproval
                         row.pendingProposal = proposal
@@ -426,7 +450,7 @@ import WorkflowKit
                 // doesn't see "Run failed" for an action that actually
                 // landed.
                 if isPostApprove {
-                    print("[AGENT] drive RESCUE post-approve generative error swallowed")
+                    Self.logger.info("drive RESCUE post-approve generative error swallowed")
                     _ = try? self.runStore.update(id: runID) { row in
                         row.status = .completed
                         if (row.outputSummary ?? "").isEmpty {
@@ -445,11 +469,11 @@ import WorkflowKit
                 continuation.finish()
                 return
             }
-            print(
-                "[AGENT] drive stream-end finishReason=\(finishReason) sinkHasProposal=\(sink.proposal != nil) outputLen=\(output.count)"
+            Self.logger.debug(
+                "drive stream-end finishReason=\(finishReason) sinkHasProposal=\(sink.proposal != nil) outputLen=\(output.count)"
             )
             if let proposal = sink.proposal {
-                print("[AGENT] drive PARK awaitingApproval kind=\(proposal.kind)")
+                Self.logger.info("drive PARK awaitingApproval kind=\(proposal.kind)")
                 _ = try? self.runStore.update(id: runID) { row in
                     row.status = .awaitingApproval
                     row.pendingProposal = proposal
@@ -458,7 +482,7 @@ import WorkflowKit
                 continuation.finish()
                 return
             }
-            print("[AGENT] drive FINISH completed")
+            Self.logger.info("drive FINISH completed")
             _ = try? self.runStore.update(id: runID) { row in
                 row.status = .completed
                 row.outputSummary = output

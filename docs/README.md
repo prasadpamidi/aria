@@ -22,6 +22,18 @@ Then read layer by layer:
 9. [layers/05-agent.md](layers/05-agent.md) — the tool-calling agent loop
 10. [layers/06-stategraph.md](layers/06-stategraph.md) — optional graph orchestration
 
+Then the two consumer-facing runtimes that compose Layers 1–6:
+
+11. [workflowkit.md](workflowkit.md) — recipes you write (deterministic workflows)
+12. [agentkit.md](agentkit.md) — goals you delegate (open-ended agents)
+
+And the orthogonal feature areas:
+
+13. [skills.md](skills.md) — Anthropic-style instruction bundles
+14. [plugins.md](plugins.md) — JS plugin tools (`.aria-tool` runtime)
+15. [traits.md](traits.md) — SPM traits (MLX, VoiceKokoro)
+16. [observability.md](observability.md) — OTel tracing/metrics + session record/replay
+
 Decision records (the "why" behind major architectural choices):
 
 - [decisions/0001-native-swift-vs-js.md](decisions/0001-native-swift-vs-js.md)

@@ -1,5 +1,6 @@
 import Aria
 import Foundation
+import Logging
 
 #if canImport(FoundationModels)
     import AriaApple
@@ -108,14 +109,18 @@ import Foundation
         }
 
         func call(_ input: ProposeActionArguments, context _: ToolContext) async throws -> String {
-            print("[AGENT] ProposeTool.call kind=\(input.kind) title=\(input.title) payloadJSON=\(input.payloadJSON)")
+            Self.logger.debug(
+                "ProposeTool.call kind=\(input.kind) title=\(input.title) payloadJSON=\(input.payloadJSON)"
+            )
             if !self.allowedKinds.isEmpty, !self.allowedKinds.contains(input.kind) {
                 let allowed = self.allowedKinds.sorted().joined(separator: ", ")
-                print("[AGENT] ProposeTool.call REJECTED kind=\(input.kind) allowed=\(allowed)")
+                Self.logger.warning(
+                    "ProposeTool.call REJECTED kind=\(input.kind) allowed=\(allowed)"
+                )
                 return "Action kind \"\(input.kind)\" is not permitted for this agent. Allowed kinds: \(allowed)."
             }
             let payload = Self.decodePayload(input.payloadJSON)
-            print("[AGENT] ProposeTool.call decoded payload=\(payload)")
+            Self.logger.debug("ProposeTool.call decoded payload=\(payload)")
             // In-loop validation — return any structural / semantic
             // problems as a TOOL OUTPUT string so the model sees
             // the reason in its next reasoning step and can
@@ -125,7 +130,9 @@ import Foundation
             if case let .invalid(reason) = result {
                 self.sink.recordRejection()
                 let attemptCount = self.sink.rejectionCount
-                print("[AGENT] ProposeTool.call INVALID kind=\(input.kind) attempt=\(attemptCount) reason=\(reason)")
+                Self.logger.warning(
+                    "ProposeTool.call INVALID kind=\(input.kind) attempt=\(attemptCount) reason=\(reason)"
+                )
                 // Hard cap on retries. Small models tend to spam
                 // the same malformed payload back rather than
                 // genuinely self-correct from validator feedback,
@@ -164,6 +171,12 @@ import Foundation
         }
 
         // MARK: Private
+
+        /// `swift-log` Logger — replaces the old `print("[AGENT] ...")`
+        /// debug spam that polluted production stdout. Same
+        /// namespace convention Aria's core logger uses
+        /// (`com.aria.<target>.<role>`).
+        private static let logger = Logger(label: "com.aria.agentkit.propose")
 
         /// Hard cap on validator-rejected retries per turn.
         /// FoundationModels (and small models generally) tend to
@@ -206,13 +219,15 @@ import Foundation
                 }
                 attempt.removeLast()
                 if let value = Self.parseJSON(attempt) {
-                    print(
-                        "[AGENT] ProposeTool.decodePayload recovered by trimming \(trimmed.count - attempt.count) trailing close-bracket(s)"
+                    Self.logger.debug(
+                        "ProposeTool.decodePayload recovered by trimming \(trimmed.count - attempt.count) trailing close-bracket(s)"
                     )
                     return value
                 }
             }
-            print("[AGENT] ProposeTool.decodePayload FAILED to parse — falling back to empty. raw=\(raw)")
+            Self.logger.error(
+                "ProposeTool.decodePayload FAILED to parse — falling back to empty. raw=\(raw)"
+            )
             return .object([:])
         }
 

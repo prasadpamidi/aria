@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 
 // MARK: - AgentApprovalSink
 
@@ -32,7 +33,9 @@ final class AgentApprovalSink: @unchecked Sendable {
     /// implicitly closes the rejection-retry budget — a
     /// successful propose ends the validation loop.
     func record(_ proposal: AgentProposal) {
-        print("[AGENT] sink.record kind=\(proposal.kind) title=\(proposal.title) payload=\(proposal.payload)")
+        Self.logger.debug(
+            "sink.record kind=\(proposal.kind) title=\(proposal.title) payload=\(proposal.payload)"
+        )
         self.lock.withLock {
             self.stored = proposal
             self.rejectionCountStorage = 0
@@ -50,7 +53,7 @@ final class AgentApprovalSink: @unchecked Sendable {
 
     /// Clear before a fresh turn / resume.
     func reset() {
-        print("[AGENT] sink.reset (was=\(self.stored?.kind ?? "nil"))")
+        Self.logger.debug("sink.reset (was=\(self.stored?.kind ?? "nil"))")
         self.lock.withLock {
             self.stored = nil
             self.rejectionCountStorage = 0
@@ -58,6 +61,12 @@ final class AgentApprovalSink: @unchecked Sendable {
     }
 
     // MARK: Private
+
+    /// `swift-log` Logger — replaces the old `print("[AGENT] ...")`
+    /// debug spam. Same label namespace Aria's core logger uses,
+    /// suffixed `agentkit.approval` so hosts can selectively
+    /// quiet it via `LoggingSystem.bootstrap`.
+    private static let logger = Logger(label: "com.aria.agentkit.approval")
 
     private let lock = NSLock()
     private var stored: AgentProposal?

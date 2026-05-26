@@ -19,6 +19,7 @@ implementations live in `AriaApple`.
 >
 > - Tool-calling **Agent** with streaming events, the full middleware stack (history persistence, windowing, summarization, RAG retrieval, automatic fact extraction), and **provider-agnostic** structured-output `respond(_:as:)` that works against FoundationModels and any cloud `LLMProvider`.
 > - **WorkflowKit** runtime — Codable workflow model, GRDB persistence, compile-to-`StateGraph` engine, capability broker for native iOS frameworks, JS plugin steps, per-step server-LLM routing, MCP integration, skill resolution. See [`docs/workflowkit.md`](docs/workflowkit.md).
+> - **AgentKit** runtime — Codable `AgentDefinition`, file-per-row JSON store, capability-to-tool bridging, `ProposeTool` + `AgentApprovalSink` for human-in-the-loop side-effects, checkpoint middleware, in-loop validator with retry cap. Apple-only; injects the host's MCP / workflow / plugin / skill tool surfaces via closures. See [`docs/agentkit.md`](docs/agentkit.md).
 > - **Skills** — Anthropic-style instruction bundles (`SKILL.md` frontmatter + body) with `SkillProvider`, on-demand `load_skill` tool, per-thread / per-workflow overrides via `SkillOverridesStore`. See [`docs/skills.md`](docs/skills.md).
 > - **JS plugin tools** — sandboxed `JSContext`-based runtime (`AriaToolsJS`) that loads `.aria-tool` bundles. Capabilities (HTTP, JSON, clipboard, share, notify, storage) are gated by per-bundle manifest declarations and enforced at bridge-construction time. See [`docs/plugins.md`](docs/plugins.md).
 > - **Native capabilities** — Keychain-backed secrets, Calendar / Reminders, HealthKit, CoreLocation, EventKit, Files, Clipboard, Share, Notifications, HTTP, Focus, Shortcuts. Wrapped behind a `CapabilityBroker` that enforces per-plugin grants.
@@ -41,37 +42,76 @@ implementations live in `AriaApple`.
 ## Architecture in one diagram
 
 ```
-┌─────────────────────────────────────────────────┐
-│  Layer 6:  StateGraph     (optional graphs)     │
-├─────────────────────────────────────────────────┤
-│  Layer 5:  Agent          (tool-calling loop)   │
-├─────────────────────────────────────────────────┤
-│  Layer 4:  Memory         (history, vectors)    │
-├─────────────────────────────────────────────────┤
-│  Layer 3:  Providers      (LLM, Tool, Embedder) │
-├─────────────────────────────────────────────────┤
-│  Layer 2:  Runnable       (composability)       │
-├─────────────────────────────────────────────────┤
-│  Layer 1:  Foundation     (data model)          │
-└─────────────────────────────────────────────────┘
+                ┌────────────────────────────────────────────────────────┐
+                │              HOST APP  (avyra, niora, your app)        │
+                │   Wires tool sources + LLM routing into the runtimes,  │
+                │   ships UI, owns content (workflows, agents, skills)   │
+                └──┬───────────────────────────────┬─────────────────────┘
+                   │                               │
+                   ▼                               ▼
+        ┌──────────────────────┐        ┌──────────────────────────┐
+        │     WorkflowKit      │        │         AgentKit         │
+        │ ── recipes you write │        │ ── goals you delegate    │
+        │  • Codable Workflow  │        │  • Codable AgentDefinition│
+        │  • CapabilityBroker  │        │  • AgentRuntime + compiler│
+        │  • Step compiler →   │        │  • ProposeTool + approval │
+        │    StateGraph        │        │  • Checkpoint middleware  │
+        │  • GRDB store        │        │  • File-JSON stores       │
+        └──────────┬───────────┘        └────────────┬──────────────┘
+                   │                                  │
+                   └─────────────┬────────────────────┘
+                                 ▼
+        ┌────────────────────────────────────────────────────────┐
+        │                       Aria (core)                      │
+        │  Layer 6:  StateGraph     (optional graphs)            │
+        │  Layer 5:  Agent          (tool-calling loop)          │
+        │  Layer 4:  Memory         (history, vectors)           │
+        │  Layer 3:  Providers      (LLM, Tool, Embedder)        │
+        │  Layer 2:  Runnable       (composability)              │
+        │  Layer 1:  Foundation     (data model)                 │
+        └────────────────────────────────────────────────────────┘
+                                 ▲
+                                 │ binds to platform-specific impls
+        ┌────────────────────────┴───────────────────────────────┐
+        │  AriaApple   AriaMLX*   AriaVoice   AriaVoiceKokoro*   │
+        │  ──────────  ────────   ─────────   ─────────────────  │
+        │  FoundationModels      Speech + AVSpeech    Kokoro 82M │
+        │  GRDB memory           STT/TTS              TTS        │
+        │                                  (* = SPM-trait-gated) │
+        └────────────────────────────────────────────────────────┘
 ```
 
-A layer depends only on layers below. See [`docs/architecture.md`](docs/architecture.md).
+**Mental model:** the bottom (`Aria` core) is platform-agnostic
+and Linux-buildable; the platform tier binds it to Apple APIs;
+**WorkflowKit + AgentKit** are two peer runtimes sitting above
+that — `WorkflowKit` runs *recipes you wrote*, `AgentKit` runs
+*goals you delegated*. Both compose Aria's `Agent` loop +
+middleware; both call into `CapabilityBroker` for native side
+effects. Host apps pick either or both.
+
+Within Aria, a layer depends only on layers below. See
+[`docs/architecture.md`](docs/architecture.md).
 
 ## Package layout
 
 ```
 Sources/
 ├── Aria/                Layers 1–6, platform-agnostic (Linux-buildable)
-├── AriaTesting/         Mocks and fixtures
+├── AriaTesting/         Mocks, fixtures, SessionReplayer
 ├── AriaApple/           FoundationModels + GRDB-backed memory (Apple-only)
-├── AriaTools/           Cross-platform tool implementations
+├── AriaTools/           Cross-platform tool implementations (HTTP, JSON, Regex, …)
 ├── AriaToolsJS/         JavaScriptCore-sandboxed user plugin runtime
 ├── AriaVoice/           Speech.framework STT + AVSpeechSynthesizer TTS
-├── AriaMLX/             MLX-backed LLMProvider (opt-in via `MLX` trait)
-├── AriaVoiceKokoro/     On-device Kokoro 82M TTS (opt-in via `VoiceKokoro` trait)
-└── WorkflowKit/         Workflow runtime + capability broker + skills + plugin steps
+├── AriaMLX/             MLX-backed LLMProvider          (opt-in via `MLX` trait)
+├── AriaVoiceKokoro/     On-device Kokoro 82M TTS        (opt-in via `VoiceKokoro` trait)
+├── WorkflowKit/         Workflow runtime + CapabilityBroker + skills + plugin steps
+├── AgentKit/            Agent runtime + AgentDefinition + ProposeTool + checkpoints
+└── AriaCLI/             Demo CLI — records a run, prints the bundle, replays it
 ```
+
+WorkflowKit and AgentKit are independent of each other; either
+can be used standalone. The avyra app ships both — workflows for
+deterministic tile-tap tasks, agents for delegated goals.
 
 ## Traits — opt-in heavy dependencies
 
@@ -342,6 +382,7 @@ See [`AGENTS.md`](AGENTS.md) for the full lane reference.
 - [`docs/architecture.md`](docs/architecture.md) — layered design and module layout
 - [`docs/traits.md`](docs/traits.md) — SPM traits (MLX, VoiceKokoro)
 - [`docs/workflowkit.md`](docs/workflowkit.md) — workflow runtime, capabilities, server-LLM routing
+- [`docs/agentkit.md`](docs/agentkit.md) — agent runtime, definitions, propose-then-host-executes
 - [`docs/skills.md`](docs/skills.md) — Anthropic-style skill bundles
 - [`docs/plugins.md`](docs/plugins.md) — JS plugin tools (`.aria-tool` runtime)
 - [`docs/platform-boundary.md`](docs/platform-boundary.md) — cross-platform discipline

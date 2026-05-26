@@ -122,57 +122,92 @@ The repository is a single Swift Package with multiple targets. Targets map to l
 aria/
 ├── Package.swift
 ├── Sources/
-│   ├── Aria/                    ← Layers 1–6, platform-agnostic
+│   ├── Aria/                    ← Layers 1–6, platform-agnostic (Linux-buildable)
 │   │   ├── Foundation/
 │   │   ├── Runnable/
 │   │   ├── Providers/           (protocols only)
 │   │   ├── Memory/              (protocols + in-memory defaults)
-│   │   ├── Agent/
+│   │   ├── Agent/               (Aria.Agent loop + middleware protocol)
 │   │   └── StateGraph/
 │   │
-│   ├── AriaTesting/             ← Mocks, fixtures, test helpers
+│   ├── AriaTesting/             ← Mocks, fixtures, SessionReplayer
 │   │   ├── MockLLMProvider.swift
 │   │   ├── RecordingObserver.swift
 │   │   └── TestTools.swift
 │   │
-│   ├── AriaApple/               ← Apple-platform implementations
+│   ├── AriaApple/               ← Apple-platform implementations (Apple-only)
 │   │   ├── Providers/
-│   │   │   ├── FoundationModelsProvider.swift
-│   │   │   ├── MLXProvider.swift
-│   │   │   └── CoreMLProvider.swift
+│   │   │   └── FoundationModelsProvider.swift
 │   │   ├── Memory/
-│   │   │   ├── SwiftDataChatHistory.swift
-│   │   │   ├── SwiftDataCheckpointer.swift
-│   │   │   └── SQLiteVecVectorStore.swift
+│   │   │   ├── GRDBChatHistory.swift
+│   │   │   ├── GRDBCheckpointer.swift
+│   │   │   └── GRDBVectorStore.swift
 │   │   ├── Embedders/
-│   │   │   ├── NLEmbeddingEmbedder.swift
-│   │   │   ├── CoreMLEmbedder.swift
-│   │   │   └── MLXEmbedder.swift
+│   │   │   └── NLEmbeddingEmbedder.swift
 │   │   └── Observability/
 │   │       └── OSLogObserver.swift
 │   │
-│   └── AriaTools/               ← Cross-platform tool implementations
-│       ├── HTTPTool.swift       (uses injected HTTPClient)
-│       ├── CalculatorTool.swift
-│       └── JSONPathTool.swift
+│   ├── AriaTools/               ← Cross-platform tool implementations
+│   │   ├── HTTPTool.swift       (uses injected HTTPClient)
+│   │   ├── CalculatorTool.swift
+│   │   ├── JSONPathTool.swift
+│   │   └── RegexTool.swift
+│   │
+│   ├── AriaToolsJS/             ← JS plugin tools (`.aria-tool` sandbox)
+│   │   ├── JSToolProvider.swift
+│   │   ├── JSContextHost.swift
+│   │   └── PluginManifest.swift
+│   │
+│   ├── AriaVoice/               ← Speech.framework STT + AVSpeech TTS
+│   ├── AriaMLX/                 ← MLX-backed LLMProvider (trait: `MLX`)
+│   ├── AriaVoiceKokoro/         ← Kokoro 82M TTS (trait: `VoiceKokoro`)
+│   │
+│   ├── WorkflowKit/             ← Recipes-you-write runtime
+│   │   ├── Model/               (Codable Workflow + step kinds)
+│   │   ├── Storage/             (GRDB store + migrator)
+│   │   ├── Engine/              (compile → StateGraph; capability broker)
+│   │   ├── Capabilities/        (Calendar, Reminders, Files, …)
+│   │   └── Plugins/             (plugin step + manifest)
+│   │
+│   ├── AgentKit/                ← Goals-you-delegate runtime (Apple-only)
+│   │   ├── Model/               (AgentDefinition, AgentRunRecord, AgentProposal)
+│   │   ├── Storage/             (file-JSON AgentStore + AgentRunStore)
+│   │   ├── Engine/              (AgentCompiler, ProposeTool, ApprovalSink, CapabilityCatalog)
+│   │   ├── Runtime/             (AgentRuntime, AgentRunEvent, CheckpointMiddleware)
+│   │   └── Catalog/             (AgentCatalog, AgentPersona)
+│   │
+│   └── AriaCLI/                 ← Demo CLI: record + replay a run
 │
 └── Tests/
     ├── AriaTests/               ← Run on Linux + Apple
-    └── AriaAppleTests/          ← Run on macOS only
+    ├── AriaAppleTests/          ← macOS only
+    └── WorkflowKitTests/        ← Includes NotificationsCapabilityTests etc.
 ```
 
 ### Target dependencies
 
 | Target | Depends on | Builds on |
 |---|---|---|
-| `Aria` | (only stdlib + Foundation subset) | Linux, macOS, iOS |
+| `Aria` | (only stdlib + Foundation subset + swift-log) | Linux, macOS, iOS |
 | `AriaTesting` | `Aria` | Linux, macOS, iOS |
-| `AriaApple` | `Aria`, Apple frameworks | macOS, iOS, watchOS, tvOS, visionOS |
+| `AriaApple` | `Aria`, FoundationModels, GRDB | macOS 15+, iOS 18+, watchOS, tvOS, visionOS |
 | `AriaTools` | `Aria` | Linux, macOS, iOS |
+| `AriaToolsJS` | `Aria`, JavaScriptCore | Apple-only |
+| `AriaVoice` | `Aria`, Speech, AVFoundation | Apple-only |
+| `AriaMLX` (trait) | `Aria`, `AriaApple`, mlx-swift-lm | Apple Silicon |
+| `AriaVoiceKokoro` (trait) | `Aria`, kokoro-ios | Apple Silicon |
+| `WorkflowKit` | `Aria`, `AriaApple` (GRDB), `AriaTools` | Apple-only |
+| `AgentKit` | `Aria`, `AriaApple`, `WorkflowKit` | Apple-only (iOS 26+) |
+| `AriaCLI` | `Aria`, `AriaTesting` | macOS, Linux |
 
-A consumer building an iOS app typically depends on `Aria` + `AriaApple` + `AriaTools`.
+**Typical iOS app**: depends on `Aria` + `AriaApple` + `AriaTools`
++ `AriaToolsJS` + `WorkflowKit`. Add `AgentKit` if shipping
+agent-style features. Flip the `MLX` / `VoiceKokoro` traits on
+for on-device 8B+ LLMs or Kokoro TTS.
 
-A consumer doing portable agent logic depends on `Aria` only and provides their own platform implementations.
+**Portable / Linux**: depends on `Aria` only. Provides own
+platform implementations of `LLMProvider`, `ChatHistory`,
+`VectorStore`, etc.
 
 ## Testing strategy
 

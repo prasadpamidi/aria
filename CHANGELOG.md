@@ -7,6 +7,52 @@ and Aria adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-05-26
+
+### Changed
+
+- **AgentKit no longer pollutes stdout with `print("[AGENT] ...")`
+  statements.** All 32 print sites across `AgentRuntime`,
+  `ProposeTool`, and `AgentApprovalSink` now go through
+  `swift-log` `Logger`s under the `com.aria.agentkit.*` label
+  namespace. Hosts can selectively quiet AgentKit logs via
+  `LoggingSystem.bootstrap` without touching workflow / core /
+  chat logs. Levels chosen by impact:
+  - `.trace` — per-event noise (stepStart, assistantStart,
+    toolExecutionStart, stepEnd)
+  - `.debug` — within-run state (tool calls, finish reasons,
+    decoded payloads)
+  - `.info` — lifecycle (runStarted, resumeStreaming,
+    awaitingApproval park, finished, cancelled, orphan sweep)
+  - `.warning` — recovery + double-boot
+  - `.error` — parse failures, hard tool errors
+
+### Docs
+
+- **New `docs/agentkit.md`** — comprehensive AgentKit explainer:
+  recipes-vs-goals mental model, runtime stack diagram, public
+  type catalog (`AgentDefinition`, stores, compiler, runtime,
+  `ProposeTool`/`AgentApprovalSink`, catalog), host injection
+  contract (`AgentProviderFactory` + `AgentExtraToolsProvider`),
+  quick-start, settled-vs-evolving status section that flags
+  the known checkpoint-restoration limitation.
+- **README rebuilt** with a two-axis stack diagram showing
+  `AgentKit` + `WorkflowKit` as peer runtimes above the core
+  six layers, with the host app at the top and platform
+  bindings (`AriaApple`/`MLX`/`Voice*`) at the bottom. Package
+  layout now lists every target (was missing `AriaToolsJS`,
+  `AriaVoice`, `AriaMLX`, `AriaVoiceKokoro`, `AgentKit`,
+  `AriaCLI`). Reading order on the docs index extended to
+  include the consumer-facing runtimes + the orthogonal feature
+  docs.
+- **Architecture doc** package-layout tree updated to match the
+  actual repo (was stale, omitting half the targets). Target
+  dependencies table now shows all eleven targets with their
+  platform requirements and trait gating.
+- **Glossary** got ~20 new AgentKit entries — every public
+  AgentKit type now has a one-paragraph definition with the
+  same voice the existing entries use.
+
 ## [0.1.2] - 2026-05-26
 
 ### Fixed
