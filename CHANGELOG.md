@@ -7,6 +7,18 @@ and Aria adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-05-26
+
+### Fixed
+
+- `AriaInfo.version` was stale at `"0.0.1-alpha.9"` for the
+  entire 0.0.x → 0.1.x line. Consumer apps (Avyra's
+  Settings → "Powered by Aria SDK" badge, AriaCLI's
+  `--version`, etc.) read this string at runtime, so the badge
+  was misreporting which SDK they were actually shipping
+  against. Bumped to `"0.1.2"`; future releases must keep
+  this in lockstep with the tag.
+
 ## [0.1.1] - 2026-05-26
 
 ### Fixed

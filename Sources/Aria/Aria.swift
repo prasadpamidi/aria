@@ -13,11 +13,15 @@ import Logging
 /// For the architecture and design, see the `docs/` folder of the
 /// repository, starting with `docs/overview.md`.
 public enum AriaInfo {
-    /// The current version of Aria.
+    /// The current version of Aria. Must be kept in lockstep with
+    /// the most recent Git tag — consumer apps (e.g. Avyra's
+    /// Settings → "Powered by Aria SDK" badge) read this at
+    /// runtime, so a stale value lies to users about which SDK
+    /// they're actually shipping against. Bump every release.
     ///
     /// Aria follows semantic versioning once it reaches `1.0.0`. Until then,
     /// breaking changes may occur on minor version bumps.
-    public static let version = "0.0.1-alpha.9"
+    public static let version = "0.1.2"
 }
 
 /// Internal logger used by core types. Backends are installed by the platform
