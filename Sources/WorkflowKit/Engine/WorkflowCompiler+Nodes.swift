@@ -40,13 +40,32 @@ extension WorkflowCompiler {
                 mlxResolver: mlxResolver
             )
             await WorkflowCompiler.bestEffortPrewarm(provider)
-            let text = try await provider.generate(
-                prompt: prompt,
-                hint: step.modelHint,
-                maxTokens: step.maxTokens
-            )
+            // Dispatch: if the step declares a structured-output
+            // schema id, route through the typed path so providers
+            // with native schema support (FoundationModels'
+            // `session.respond(to:generating:)`, OpenAI function-
+            // calling) can constrain the model at decode time. The
+            // default protocol impl falls back to text + JSON parse
+            // for providers that don't override — so existing
+            // untyped providers keep working without code changes.
+            let bindingValue: JSONValue
+            if let schemaID = step.structuredOutputSchema, !schemaID.isEmpty {
+                bindingValue = try await provider.generateStructured(
+                    prompt: prompt,
+                    hint: step.modelHint,
+                    maxTokens: step.maxTokens,
+                    schemaID: schemaID
+                )
+            } else {
+                let text = try await provider.generate(
+                    prompt: prompt,
+                    hint: step.modelHint,
+                    maxTokens: step.maxTokens
+                )
+                bindingValue = .string(text)
+            }
             var next = state
-            next.bindings[step.outputBinding] = .string(text)
+            next.bindings[step.outputBinding] = bindingValue
             return next
         })
     }
