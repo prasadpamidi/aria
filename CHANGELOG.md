@@ -7,6 +7,37 @@ and Aria adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-05-26
+
+### Added
+
+- **WorkflowKit: typed structured-output dispatch for `LLMStep`.**
+  `WorkflowLLMProvider` now has a `generateStructured(prompt:hint:maxTokens:schemaID:)`
+  entry point. The compiler routes an LLM step through it whenever
+  `LLMStep.structuredOutputSchema` is set to a non-empty id; otherwise the
+  existing `generate(...)` text path is unchanged. The default
+  `generateStructured` impl falls back to text + lenient JSON parse (strips
+  markdown code fences), so providers that haven't adopted native schema
+  support keep working without code changes. Providers with native
+  structured-output APIs (Apple FoundationModels' `session.respond(to:
+  generating:)`, OpenAI function-calling, etc.) override
+  `generateStructured` to constrain the model with the schema at decode
+  time — strictly better than prompt-engineered "please emit JSON"
+  instructions because the model can't drift.
+
+  The `schemaID` is opaque to WorkflowKit: providers maintain their own
+  registry mapping id → schema. WorkflowKit only needs to know it's
+  non-empty to switch dispatch.
+
+  Backwards-compatible: existing workflows without
+  `structuredOutputSchema` and existing providers without
+  `generateStructured` continue to behave identically to 0.1.3.
+
+  Workflow output bindings now carry the structured result directly:
+  steps without a schema bind as `.string(text)` (unchanged); steps
+  with a schema bind as the `JSONValue` the provider returned, so
+  downstream templates can address fields with `{{step.field}}`.
+
 ## [0.1.3] - 2026-05-26
 
 ### Changed

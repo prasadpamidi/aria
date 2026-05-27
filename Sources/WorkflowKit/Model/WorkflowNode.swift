@@ -126,10 +126,15 @@ public enum WorkflowNode: Codable, Sendable, Identifiable, Equatable {
 /// One agent turn. `promptTemplate` interpolates against the
 /// workflow's running bindings using the `{{stepId.field}}` syntax
 /// (resolved by `TemplateInterpolator` in slice 5). When
-/// `structuredOutputSchema` is present, the runtime asks the model
-/// for a `@Generable`-style structured response and binds each
-/// field of the result; otherwise the raw text becomes
-/// `<stepId>.text`.
+/// `structuredOutputSchema` is present and non-empty, the runtime
+/// dispatches through `WorkflowLLMProvider.generateStructured(...)`
+/// — providers with native schema support (FoundationModels,
+/// OpenAI function-calling) constrain the model with the schema
+/// at decode time; the default impl falls back to text + lenient
+/// JSON parse. The binding receives the structured `JSONValue`
+/// directly so downstream templates can address fields with
+/// `{{step.field}}`. Without `structuredOutputSchema` the raw
+/// text binds as `.string(text)` under `outputBinding`.
 public struct LLMStep: Codable, Sendable, Equatable {
     // MARK: Lifecycle
 
