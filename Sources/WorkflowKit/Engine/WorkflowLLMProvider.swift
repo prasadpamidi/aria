@@ -31,6 +31,20 @@ import Foundation
 /// what Generable / JSON Schema / OpenAPI shape the id refers to, and
 /// maintains its own registry mapping id → schema.
 public protocol WorkflowLLMProvider: Sendable {
+    /// Declared up-front. Providers may compute this value lazily
+    /// but it must be stable for the life of the provider instance.
+    /// The compiler's pre-flight pass reads this to validate that
+    /// every `LLMStep`'s declared requirements (modalities,
+    /// streaming, mid-turn tools, schema id) are satisfied before
+    /// any tokens flow — mismatches surface as
+    /// `WorkflowEngineError.providerCapabilityMissing(...)` rather
+    /// than silent degraded output.
+    ///
+    /// Conservative default (`WorkflowProviderCapabilities()`) so existing
+    /// 0.1.x providers compile unchanged on the 0.2.x upgrade; opt
+    /// in to richer capabilities by overriding.
+    var capabilities: WorkflowProviderCapabilities { get }
+
     func generate(
         prompt: String,
         hint: ModelFamilyHint,
@@ -60,9 +74,60 @@ public protocol WorkflowLLMProvider: Sendable {
         maxTokens: Int?,
         schemaID: String
     ) async throws -> JSONValue
+
+    /// Streaming variant of `generateStructured`. Yields cumulative
+    /// snapshots as the model fills the structured response —
+    /// powers typewriter UIs where the user sees fields populate
+    /// progressively. Each yield is a complete `JSONValue` matching
+    /// the schema so consumers can render at any point.
+    ///
+    /// Default impl awaits the non-streaming `generateStructured`
+    /// and yields exactly one terminal value — a graceful
+    /// degradation for providers without native streaming support.
+    /// Providers that can stream override this and update
+    /// `capabilities.supportsStreamingStructured = true` so the
+    /// compiler routes through here when the caller opts into
+    /// streaming. Added in 0.2.0.
+    func streamStructured(
+        prompt: String,
+        hint: ModelFamilyHint,
+        maxTokens: Int?,
+        schemaID: String
+    ) -> AsyncThrowingStream<JSONValue, any Error>
+
+    /// Generate a structured response from a multimodal content
+    /// list (text + image / audio / file blocks). Routed to by the
+    /// runner when an `LLMStep` has non-empty
+    /// `attachmentBindings`; the compiler validates ahead of time
+    /// that the bound provider advertises every required modality
+    /// in `capabilities.supportedModalities`.
+    ///
+    /// Default impl strips non-text blocks and calls
+    /// `generateStructured` — but the compiler pre-flight prevents
+    /// this from being a silent loss because mismatched modalities
+    /// fail the run before the executor invokes the provider.
+    /// Providers with native multimodal support override this; the
+    /// default exists so a text-only provider that never sees a
+    /// multimodal LLM step in practice doesn't have to implement
+    /// the method. Added in 0.2.0.
+    func generateMultimodal(
+        content: [ContentBlock],
+        hint: ModelFamilyHint,
+        maxTokens: Int?,
+        schemaID: String?
+    ) async throws -> JSONValue
 }
 
 extension WorkflowLLMProvider {
+    /// Conservative default — text-only, no streaming, no mid-turn
+    /// tools. Existing 0.1.x providers inherit this on the 0.2.x
+    /// upgrade and don't accidentally claim more than they support.
+    /// Providers that *do* support richer behaviour override
+    /// `capabilities` to advertise it.
+    public var capabilities: WorkflowProviderCapabilities {
+        .conservative
+    }
+
     /// Default no-op so adopters opt in to warmup only when they
     /// have actual state to prepare. Keeps the OpenAI / Anthropic /
     /// Gemini clients clean (their request shape needs nothing
@@ -103,6 +168,113 @@ extension WorkflowLLMProvider {
                 "structured-output text did not parse as JSON: \(error.localizedDescription)"
             )
         }
+    }
+
+    /// Default streaming impl: await the non-streaming call and
+    /// yield exactly one terminal snapshot. Providers without
+    /// native streaming get this for free; consumers see the same
+    /// final result they'd get from `generateStructured` plus a
+    /// single terminal `.stepPartial` event.
+    public func streamStructured(
+        prompt: String,
+        hint: ModelFamilyHint,
+        maxTokens: Int?,
+        schemaID: String
+    ) -> AsyncThrowingStream<JSONValue, any Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    let value = try await self.generateStructured(
+                        prompt: prompt,
+                        hint: hint,
+                        maxTokens: maxTokens,
+                        schemaID: schemaID
+                    )
+                    continuation.yield(value)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    /// Default multimodal impl: strip non-text blocks, concatenate
+    /// the text into a single prompt, and dispatch to the structured
+    /// or untyped path based on `schemaID`. Safe because the compiler
+    /// pre-flight rejects multimodal steps bound to providers that
+    /// don't advertise the right modality — by the time the runner
+    /// reaches this default it's guaranteed all blocks are text.
+    public func generateMultimodal(
+        content: [ContentBlock],
+        hint: ModelFamilyHint,
+        maxTokens: Int?,
+        schemaID: String?
+    ) async throws -> JSONValue {
+        let text = content.compactMap { block -> String? in
+            if case let .text(value) = block {
+                return value
+            }
+            return nil
+        }.joined(separator: "\n\n")
+        if let schemaID, !schemaID.isEmpty {
+            return try await self.generateStructured(
+                prompt: text,
+                hint: hint,
+                maxTokens: maxTokens,
+                schemaID: schemaID
+            )
+        }
+        let plain = try await self.generate(prompt: text, hint: hint, maxTokens: maxTokens)
+        return .string(plain)
+    }
+}
+
+// MARK: - SubAgentExecutor
+
+/// Host-supplied executor that runs an `AgentDefinition` (resolved
+/// by `agentDefinitionID`) and returns the final answer. WorkflowKit
+/// stays dependency-free of AgentKit — the host wires
+/// `AgentRuntime` (or any equivalent) through this protocol when it
+/// wants to enable `SubAgentStep` nodes in its workflows.
+///
+/// `final.text` is always present; `final.structured` is set when
+/// the agent definition has a typed answer schema (AgentKit 0.2.x+
+/// — until then, leave `nil`).
+public protocol SubAgentExecutor: Sendable {
+    func run(
+        agentDefinitionID: UUID,
+        inputs: [String: JSONValue],
+        maxSteps: Int?,
+        attended: Bool
+    ) async throws -> SubAgentResult
+}
+
+// MARK: - SubAgentResult
+
+public struct SubAgentResult: Sendable, Equatable {
+    // MARK: Lifecycle
+
+    public init(text: String, structured: JSONValue? = nil) {
+        self.text = text
+        self.structured = structured
+    }
+
+    // MARK: Public
+
+    public let text: String
+    public let structured: JSONValue?
+
+    /// Pack into the `JSONValue` shape the workflow binds under
+    /// `SubAgentStep.outputBinding` — `{"text": "...",
+    /// "structured": ...}`. Always emits both keys so downstream
+    /// templates can safely reference either; `structured` is
+    /// `.null` when absent.
+    public var asBinding: JSONValue {
+        .object([
+            "text": .string(self.text),
+            "structured": self.structured ?? .null
+        ])
     }
 }
 

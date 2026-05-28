@@ -22,6 +22,14 @@ public enum WorkflowNode: Codable, Sendable, Identifiable, Equatable {
     case parallel(ParallelStep)
     case loop(LoopStep)
     case output(OutputStep)
+    /// Embed an AgentKit agent loop as a workflow step. The runner
+    /// resolves a `SubAgentExecutor` (typically backed by
+    /// `AgentRuntime`), runs the agent with the provided inputs,
+    /// and binds the final answer back under `outputBinding`. Lets
+    /// a mostly-deterministic workflow defer one step to the agentic
+    /// mid-turn-tools loop without WorkflowKit duplicating loop
+    /// machinery. Added in 0.2.0.
+    case subAgent(SubAgentStep)
 
     // MARK: Lifecycle
 
@@ -47,6 +55,8 @@ public enum WorkflowNode: Codable, Sendable, Identifiable, Equatable {
             self = try .loop(container.decode(LoopStep.self, forKey: .data))
         case .output:
             self = try .output(container.decode(OutputStep.self, forKey: .data))
+        case .subAgent:
+            self = try .subAgent(container.decode(SubAgentStep.self, forKey: .data))
         }
     }
 
@@ -63,6 +73,7 @@ public enum WorkflowNode: Codable, Sendable, Identifiable, Equatable {
         case let .parallel(step): step.id
         case let .loop(step): step.id
         case let .output(step): step.id
+        case let .subAgent(step): step.id
         }
     }
 
@@ -96,6 +107,9 @@ public enum WorkflowNode: Codable, Sendable, Identifiable, Equatable {
         case let .output(step):
             try container.encode(Discriminator.output, forKey: .type)
             try container.encode(step, forKey: .data)
+        case let .subAgent(step):
+            try container.encode(Discriminator.subAgent, forKey: .type)
+            try container.encode(step, forKey: .data)
         }
     }
 
@@ -113,6 +127,7 @@ public enum WorkflowNode: Codable, Sendable, Identifiable, Equatable {
         case parallel
         case loop
         case output
+        case subAgent
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -148,7 +163,11 @@ public struct LLMStep: Codable, Sendable, Equatable {
         serverProviderID: UUID? = nil,
         mlxModelID: String? = nil,
         extraSkillIDs: Set<UUID> = [],
-        disabledSkillIDs: Set<UUID> = []
+        disabledSkillIDs: Set<UUID> = [],
+        attachmentBindings: [String] = [],
+        requiredModalities: Set<ContentModality> = [],
+        retryPolicy: RetryPolicy? = nil,
+        timeout: Duration? = nil
     ) {
         self.id = id
         self.promptTemplate = promptTemplate
@@ -160,6 +179,10 @@ public struct LLMStep: Codable, Sendable, Equatable {
         self.mlxModelID = mlxModelID
         self.extraSkillIDs = extraSkillIDs
         self.disabledSkillIDs = disabledSkillIDs
+        self.attachmentBindings = attachmentBindings
+        self.requiredModalities = requiredModalities
+        self.retryPolicy = retryPolicy
+        self.timeout = timeout
     }
 
     public init(from decoder: Decoder) throws {
@@ -174,6 +197,13 @@ public struct LLMStep: Codable, Sendable, Equatable {
         self.mlxModelID = try container.decodeIfPresent(String.self, forKey: .mlxModelID)
         self.extraSkillIDs = try container.decodeIfPresent(Set<UUID>.self, forKey: .extraSkillIDs) ?? []
         self.disabledSkillIDs = try container.decodeIfPresent(Set<UUID>.self, forKey: .disabledSkillIDs) ?? []
+        self.attachmentBindings = try container.decodeIfPresent([String].self, forKey: .attachmentBindings) ?? []
+        self.requiredModalities = try container.decodeIfPresent(
+            Set<ContentModality>.self,
+            forKey: .requiredModalities
+        ) ?? []
+        self.retryPolicy = try container.decodeIfPresent(RetryPolicy.self, forKey: .retryPolicy)
+        self.timeout = try container.decodeIfPresent(Duration.self, forKey: .timeout)
     }
 
     // MARK: Public
@@ -220,6 +250,38 @@ public struct LLMStep: Codable, Sendable, Equatable {
     /// still hide it on a per-step basis when it's irrelevant.
     public let disabledSkillIDs: Set<UUID>
 
+    /// Names of workflow bindings the runner should resolve into
+    /// `ContentBlock` values and pass to the provider's
+    /// `generateMultimodal(...)` call. Each referenced binding must
+    /// decode as a `ContentBlock` (or array of them). Empty for the
+    /// historical text-only path; the runner picks the right
+    /// provider entry-point based on whether this is empty. Added in
+    /// 0.2.0.
+    public let attachmentBindings: [String]
+
+    /// Optional explicit modality set the step asserts it needs. The
+    /// compiler's capability validator unions this with the
+    /// modalities discovered in `attachmentBindings` to drive the
+    /// pre-flight check against the bound provider's
+    /// `supportedModalities`. Use this when the binding payload is
+    /// computed dynamically and you want the safety net regardless.
+    /// Added in 0.2.0.
+    public let requiredModalities: Set<ContentModality>
+
+    /// Per-step retry policy. `nil` keeps the historical "one
+    /// attempt, fail the run" behaviour for backwards compatibility.
+    /// Set this to remove host-side retry loops around prose-leak,
+    /// transient provider errors, rate limits, and timeouts. Added in
+    /// 0.2.0.
+    public let retryPolicy: RetryPolicy?
+
+    /// Per-attempt timeout. `nil` means "wait as long as the
+    /// provider takes" (today's behaviour). When set, the runner
+    /// races the generate call against `Task.sleep(for: timeout)`
+    /// and surfaces a timeout error that the `retryPolicy` can
+    /// retry on. Added in 0.2.0.
+    public let timeout: Duration?
+
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.id, forKey: .id)
@@ -236,6 +298,14 @@ public struct LLMStep: Codable, Sendable, Equatable {
         if !self.disabledSkillIDs.isEmpty {
             try container.encode(self.disabledSkillIDs, forKey: .disabledSkillIDs)
         }
+        if !self.attachmentBindings.isEmpty {
+            try container.encode(self.attachmentBindings, forKey: .attachmentBindings)
+        }
+        if !self.requiredModalities.isEmpty {
+            try container.encode(self.requiredModalities, forKey: .requiredModalities)
+        }
+        try container.encodeIfPresent(self.retryPolicy, forKey: .retryPolicy)
+        try container.encodeIfPresent(self.timeout, forKey: .timeout)
     }
 
     // MARK: Private
@@ -251,6 +321,10 @@ public struct LLMStep: Codable, Sendable, Equatable {
         case mlxModelID
         case extraSkillIDs
         case disabledSkillIDs
+        case attachmentBindings
+        case requiredModalities
+        case retryPolicy
+        case timeout
     }
 }
 
@@ -585,5 +659,122 @@ public struct OutputStep: Codable, Sendable, Equatable {
         case id
         case fields
         case renderModes
+    }
+}
+
+// MARK: - SubAgentStep
+
+/// Embed an AgentKit agent loop as a workflow step. Added in 0.2.0
+/// to bridge the deterministic single-shot workflow model with
+/// AgentKit's multi-turn loop without duplicating agent-runner
+/// machinery inside WorkflowKit. The runner resolves a
+/// `SubAgentExecutor` (see `WorkflowLLMProvider.swift`) — typically
+/// backed by `AgentRuntime` — runs the named agent definition with
+/// the provided inputs, and binds the final answer (text +
+/// optional structured payload) back under `outputBinding`.
+///
+/// The agent's own model selection, tool set, approval policy, and
+/// memory are all owned by its `AgentDefinition`; this step just
+/// names which one to invoke and how to thread the workflow's
+/// running bindings into the agent's first user message.
+public struct SubAgentStep: Codable, Sendable, Equatable {
+    // MARK: Lifecycle
+
+    public init(
+        id: UUID = UUID(),
+        agentDefinitionID: UUID,
+        inputBindings: [String: String] = [:],
+        outputBinding: String,
+        maxSteps: Int? = nil,
+        attended: Bool? = nil,
+        retryPolicy: RetryPolicy? = nil,
+        timeout: Duration? = nil
+    ) {
+        self.id = id
+        self.agentDefinitionID = agentDefinitionID
+        self.inputBindings = inputBindings
+        self.outputBinding = outputBinding
+        self.maxSteps = maxSteps
+        self.attended = attended
+        self.retryPolicy = retryPolicy
+        self.timeout = timeout
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try container.decode(UUID.self, forKey: .id)
+        self.agentDefinitionID = try container.decode(UUID.self, forKey: .agentDefinitionID)
+        self.inputBindings = try container.decodeIfPresent(
+            [String: String].self,
+            forKey: .inputBindings
+        ) ?? [:]
+        self.outputBinding = try container.decode(String.self, forKey: .outputBinding)
+        self.maxSteps = try container.decodeIfPresent(Int.self, forKey: .maxSteps)
+        self.attended = try container.decodeIfPresent(Bool.self, forKey: .attended)
+        self.retryPolicy = try container.decodeIfPresent(RetryPolicy.self, forKey: .retryPolicy)
+        self.timeout = try container.decodeIfPresent(Duration.self, forKey: .timeout)
+    }
+
+    // MARK: Public
+
+    public let id: UUID
+
+    /// Stable id resolved through the host-provided
+    /// `SubAgentExecutor` (typically maps to `AgentStore`).
+    public let agentDefinitionID: UUID
+
+    /// Workflow-binding → agent-input map. Values are interpolated
+    /// against the running bindings using the same
+    /// `{{name.field}}` syntax other steps use, then handed to the
+    /// executor as a `[String: JSONValue]`. The executor builds
+    /// the agent's first user message from these — typically
+    /// concatenating them as labelled blocks, but the executor
+    /// chooses the shape.
+    public let inputBindings: [String: String]
+
+    /// Where the agent's final answer lands. The executor returns
+    /// `JSONValue.object({"text": "...", "structured": ...?})` —
+    /// callers that just want the text can address it as
+    /// `{{step.text}}`; structured answers as
+    /// `{{step.structured.<field>}}`.
+    public let outputBinding: String
+
+    /// Override the agent definition's `maxSteps`. `nil` inherits
+    /// the definition's value.
+    public let maxSteps: Int?
+
+    /// Override the run's `attended` flag for this agent only.
+    /// `nil` inherits the workflow run's value (set by the
+    /// caller of `WorkflowRunner.run(...)` / `runStreaming(...)`).
+    public let attended: Bool?
+
+    public let retryPolicy: RetryPolicy?
+    public let timeout: Duration?
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self.id, forKey: .id)
+        try container.encode(self.agentDefinitionID, forKey: .agentDefinitionID)
+        if !self.inputBindings.isEmpty {
+            try container.encode(self.inputBindings, forKey: .inputBindings)
+        }
+        try container.encode(self.outputBinding, forKey: .outputBinding)
+        try container.encodeIfPresent(self.maxSteps, forKey: .maxSteps)
+        try container.encodeIfPresent(self.attended, forKey: .attended)
+        try container.encodeIfPresent(self.retryPolicy, forKey: .retryPolicy)
+        try container.encodeIfPresent(self.timeout, forKey: .timeout)
+    }
+
+    // MARK: Private
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case agentDefinitionID
+        case inputBindings
+        case outputBinding
+        case maxSteps
+        case attended
+        case retryPolicy
+        case timeout
     }
 }

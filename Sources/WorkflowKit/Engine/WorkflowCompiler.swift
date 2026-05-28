@@ -31,7 +31,9 @@ public struct WorkflowCompiler: Sendable {
         serverLLMResolver: ServerLLMProviderResolver? = nil,
         mlxLLMResolver: MLXLLMProviderResolver? = nil,
         mcpCredentialResolver: MCPCredentialResolver? = nil,
-        skillResolver: WorkflowSkillResolver? = nil
+        skillResolver: WorkflowSkillResolver? = nil,
+        subAgentExecutor: (any SubAgentExecutor)? = nil,
+        retryClassifier: any WorkflowRetryClassifier = DefaultWorkflowRetryClassifier()
     ) {
         self.broker = broker
         self.llmProvider = llmProvider
@@ -41,6 +43,8 @@ public struct WorkflowCompiler: Sendable {
         self.mlxLLMResolver = mlxLLMResolver
         self.mcpCredentialResolver = mcpCredentialResolver
         self.skillResolver = skillResolver
+        self.subAgentExecutor = subAgentExecutor
+        self.retryClassifier = retryClassifier
     }
 
     // MARK: Public
@@ -157,6 +161,20 @@ public struct WorkflowCompiler: Sendable {
     /// set. `nil` means workflow LLM steps see no skills, which
     /// matches pre-skills behaviour.
     let skillResolver: WorkflowSkillResolver?
+    /// Optional bridge to the app's `AgentRuntime` (or any
+    /// equivalent) for executing `SubAgentStep` nodes. When `nil`,
+    /// any `SubAgentStep` in the workflow fails at run time with
+    /// `WorkflowEngineError.subAgentExecutorUnavailable`. Added in
+    /// 0.2.0.
+    let subAgentExecutor: (any SubAgentExecutor)?
+    /// Classifier the per-step retry executor consults to decide
+    /// whether a thrown error matches one of the retry policy's
+    /// `retryOn` categories. Defaults to
+    /// `DefaultWorkflowRetryClassifier`, which handles the
+    /// universal decode-failure / timeout / cancellation cases.
+    /// Hosts compose vendor-specific classifiers on top via
+    /// `DefaultWorkflowRetryClassifier.compose(_:)`. Added in 0.2.0.
+    let retryClassifier: any WorkflowRetryClassifier
 
     /// Stable, namespaced binding key for a branch's predicate
     /// outcome. Underscore-prefixed so it doesn't collide with
@@ -371,6 +389,14 @@ public struct WorkflowCompiler: Sendable {
             )
         case let .output(step):
             self.addOutputNode(step: step, name: name, graph: &graph, sink: context.eventSink)
+        case let .subAgent(step):
+            self.addSubAgentNode(
+                step: step,
+                name: name,
+                graph: &graph,
+                attended: context.attended,
+                sink: context.eventSink
+            )
         }
     }
 
