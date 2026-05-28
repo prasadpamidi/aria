@@ -40,6 +40,18 @@ extension WorkflowCompiler {
                 serverResolver: serverResolver,
                 mlxResolver: mlxResolver
             )
+            // Capability pre-flight: reject a step whose declared
+            // requirements aren't met by the resolved provider
+            // BEFORE any tokens flow. Avoids the silent-degradation
+            // failure mode where a vision step bound to a text-only
+            // provider returns plausible-but-wrong output. Provider
+            // resolution is async (server / MLX resolvers) so this
+            // check has to happen here at run time rather than in
+            // `compile(...)`.
+            try WorkflowCompiler.validateStepCapabilities(
+                step: step,
+                provider: provider
+            )
             await WorkflowCompiler.bestEffortPrewarm(provider)
 
             // The executor handles retry, timeout, streaming
@@ -96,6 +108,64 @@ extension WorkflowCompiler {
             return prompt
         }
         return "\(block.text)\n\n\(prompt)"
+    }
+
+    /// Validate that the resolved provider can actually serve the
+    /// step's declared requirements. Throws
+    /// `WorkflowEngineError.providerCapabilityMissing` with a
+    /// human-readable `requirement` label so hosts can render a
+    /// clear "switch providers / drop this step" diagnostic.
+    ///
+    /// Run-time (not compile-time) because provider resolution is
+    /// async (`serverLLMResolver` / `mlxLLMResolver` can return
+    /// different providers per request based on host state). The
+    /// trade-off: a misconfigured workflow fails on first run, not
+    /// at compile. Acceptable since the failure is loud and the
+    /// diagnostic names the gap.
+    static func validateStepCapabilities(
+        step: LLMStep,
+        provider: any WorkflowLLMProvider
+    ) throws {
+        let caps = provider.capabilities
+        let providerLabel = String(describing: type(of: provider))
+
+        // Requested modalities (explicit + inferred from attachments).
+        // We can't know the attachment block types until runtime
+        // resolution (the binding might be image OR file OR ...),
+        // so we only check the EXPLICIT requirements here. Mismatch
+        // at attachment resolution still surfaces via
+        // `multimodalAttachmentInvalid` from the executor.
+        let needed = step.requiredModalities
+        let missing = needed.subtracting(caps.supportedModalities)
+        if !missing.isEmpty {
+            let label = missing
+                .map(\.rawValue)
+                .sorted()
+                .joined(separator: ", ")
+            throw WorkflowEngineError.providerCapabilityMissing(
+                stepID: step.id,
+                requirement: "modalities: \(label)",
+                providerLabel: providerLabel
+            )
+        }
+
+        // Multimodal step against a text-only provider — even
+        // without explicit `requiredModalities`, attachments imply
+        // SOME non-text modality is needed.
+        if !step.attachmentBindings.isEmpty,
+           caps.supportedModalities == [.text] {
+            throw WorkflowEngineError.providerCapabilityMissing(
+                stepID: step.id,
+                requirement: "multimodal attachments (provider is text-only)",
+                providerLabel: providerLabel
+            )
+        }
+
+        // Empty `retryOn` set on a retry policy means the policy
+        // can never fire — almost always a config typo.
+        if let policy = step.retryPolicy, policy.retryOn.isEmpty {
+            throw WorkflowEngineError.retryPolicyHasNoRetryableErrors(stepID: step.id)
+        }
     }
 
     /// Fire the provider's optional warm-up hook. Errors are

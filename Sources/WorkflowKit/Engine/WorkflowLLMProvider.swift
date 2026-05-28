@@ -182,7 +182,7 @@ extension WorkflowLLMProvider {
         schemaID: String
     ) -> AsyncThrowingStream<JSONValue, any Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 do {
                     let value = try await self.generateStructured(
                         prompt: prompt,
@@ -196,6 +196,12 @@ extension WorkflowLLMProvider {
                     continuation.finish(throwing: error)
                 }
             }
+            // Honour AsyncThrowingStream cancellation so a consumer
+            // that drops the stream (e.g. SwiftUI view dismissed
+            // mid-generation) actually stops the underlying provider
+            // call instead of letting it run to completion + throw
+            // away the result.
+            continuation.onTermination = { _ in task.cancel() }
         }
     }
 
