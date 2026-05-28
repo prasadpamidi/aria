@@ -12,11 +12,26 @@ import Foundation
 public enum WorkflowRunEvent: Sendable, Equatable {
     /// Engine started executing the named node.
     case stepStarted(nodeID: UUID)
+    /// Incremental snapshot from a streaming structured-output
+    /// step. Yields cumulative `JSONValue` snapshots — each one
+    /// is a complete view at that point in generation, so
+    /// consumers can render at any time without joining frames.
+    /// Only emitted when the bound provider advertises
+    /// `capabilities.supportsStreamingStructured = true` and the
+    /// caller uses `WorkflowRunner.runStreaming(...)`. Added in
+    /// 0.2.0.
+    case stepPartial(nodeID: UUID, outputBinding: String, snapshot: JSONValue)
     /// Node finished successfully. `value` is the value that
     /// landed under `outputBinding` (when the step writes one)
     /// — extracted once here so the UI doesn't have to walk
     /// the bindings map itself.
     case stepCompleted(nodeID: UUID, outputBinding: String?, value: JSONValue?)
+    /// One attempt of a retryable step failed and the runner is
+    /// going to retry. Carries the attempt number that just
+    /// failed (1-indexed) and the next-attempt delay so UIs can
+    /// surface a "retrying in 2s" toast. Final-attempt failures
+    /// emit `.stepFailed` instead. Added in 0.2.0.
+    case stepRetrying(nodeID: UUID, attempt: Int, nextDelay: Duration?, error: String)
     /// Node threw. `error` is `localizedDescription` because the
     /// underlying error isn't `Sendable & Equatable` in the
     /// general case — UIs that need typed handling should look

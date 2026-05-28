@@ -21,6 +21,7 @@ extension WorkflowCompiler {
         let serverResolver = self.serverLLMResolver
         let mlxResolver = self.mlxLLMResolver
         let skillResolver = self.skillResolver
+        let classifier = self.retryClassifier
         let skillIDs = WorkflowSkillSet.effective(workflow: workflow, step: step)
         graph.addNode(name, WorkflowCompiler.instrument(
             nodeID: step.id,
@@ -40,30 +41,37 @@ extension WorkflowCompiler {
                 mlxResolver: mlxResolver
             )
             await WorkflowCompiler.bestEffortPrewarm(provider)
-            // Dispatch: if the step declares a structured-output
-            // schema id, route through the typed path so providers
-            // with native schema support (FoundationModels'
-            // `session.respond(to:generating:)`, OpenAI function-
-            // calling) can constrain the model at decode time. The
-            // default protocol impl falls back to text + JSON parse
-            // for providers that don't override — so existing
-            // untyped providers keep working without code changes.
-            let bindingValue: JSONValue
-            if let schemaID = step.structuredOutputSchema, !schemaID.isEmpty {
-                bindingValue = try await provider.generateStructured(
-                    prompt: prompt,
-                    hint: step.modelHint,
-                    maxTokens: step.maxTokens,
-                    schemaID: schemaID
-                )
-            } else {
-                let text = try await provider.generate(
-                    prompt: prompt,
-                    hint: step.modelHint,
-                    maxTokens: step.maxTokens
-                )
-                bindingValue = .string(text)
-            }
+
+            // The executor handles retry, timeout, streaming
+            // dispatch (when both the caller AND provider opt in),
+            // multimodal dispatch, and the structured-vs-text
+            // routing. `allowStreaming` is true only when a sink
+            // is present (i.e. `runStreaming(...)` is the call
+            // path) and the resolved provider advertises
+            // streaming structured output — otherwise we keep the
+            // historical single-yield behaviour.
+            let plan = LLMStepExecutor.Plan(
+                stepID: step.id,
+                outputBinding: step.outputBinding,
+                promptTemplate: step.promptTemplate,
+                modelHint: step.modelHint,
+                maxTokens: step.maxTokens,
+                structuredOutputSchema: step.structuredOutputSchema,
+                attachmentBindings: step.attachmentBindings,
+                requiredModalities: step.requiredModalities,
+                retryPolicy: step.retryPolicy,
+                timeout: step.timeout,
+                allowStreaming: sink != nil
+                    && provider.capabilities.supportsStreamingStructured
+            )
+            let bindingValue = try await LLMStepExecutor.execute(
+                plan: plan,
+                prompt: prompt,
+                bindings: state.bindings,
+                provider: provider,
+                classifier: classifier,
+                sink: sink
+            )
             var next = state
             next.bindings[step.outputBinding] = bindingValue
             return next
@@ -444,6 +452,7 @@ extension WorkflowCompiler {
         case let .pluginTool(step): step.outputBinding
         case let .mcpTool(step): step.outputBinding
         case let .transform(step): step.outputBinding
+        case let .subAgent(step): step.outputBinding
         case .branch, .parallel, .loop, .output: nil
         }
     }
@@ -541,6 +550,12 @@ extension WorkflowCompiler {
             throw WorkflowEngineError.loopBodyContainsUnsupportedNode("nested loop")
         case .output:
             throw WorkflowEngineError.loopBodyContainsUnsupportedNode("output")
+        case .subAgent:
+            // SubAgent steps need the host's `SubAgentExecutor` —
+            // they're top-level only, not legal inside a loop body
+            // (matches branch/parallel/loop/output). Run a sub-agent
+            // through its own top-level step instead.
+            throw WorkflowEngineError.loopBodyContainsUnsupportedNode("sub-agent")
         }
     }
 
@@ -590,5 +605,123 @@ extension WorkflowCompiler {
             next.bindings[bindingKey] = .bool(outcome)
             return next
         })
+    }
+}
+
+extension WorkflowCompiler {
+    /// Emit a `SubAgentStep` as a single state-graph node that
+    /// delegates to the configured `SubAgentExecutor`. Inputs are
+    /// templated against the running bindings the same way every
+    /// other step's `argsTemplate` resolves; the executor returns
+    /// a `SubAgentResult` whose `asBinding` payload lands under
+    /// the step's `outputBinding` (so downstream templates can
+    /// address `{{step.text}}` and `{{step.structured.field}}`).
+    func addSubAgentNode(
+        step: SubAgentStep,
+        name: String,
+        graph: inout StateGraph<WorkflowState>,
+        attended runAttended: Bool,
+        sink: (any WorkflowEventSink)?
+    ) {
+        let executor = self.subAgentExecutor
+        let classifier = self.retryClassifier
+        graph.addNode(name, WorkflowCompiler.instrument(
+            nodeID: step.id,
+            outputBinding: step.outputBinding,
+            sink: sink
+        ) { state in
+            guard let executor else {
+                throw WorkflowEngineError.subAgentExecutorUnavailable
+            }
+            // Render every input template against the running
+            // bindings before handing them to the executor — same
+            // interpolation contract as `CapabilityStep.argsTemplate`.
+            // Bound as `let` so the closure capture inside the
+            // retry loop's `TaskGroup` body is Sendable-clean.
+            let rendered: [String: JSONValue] = {
+                var values: [String: JSONValue] = [:]
+                for (slot, template) in step.inputBindings {
+                    values[slot] = .string(
+                        TemplateInterpolator.render(template, bindings: state.bindings)
+                    )
+                }
+                return values
+            }()
+            let effectiveAttended = step.attended ?? runAttended
+
+            // Wrap the single executor call in the same retry +
+            // timeout helper LLM steps use, so SubAgent inherits
+            // the policy story for free. Build a one-shot
+            // "provider call" closure that just runs the executor;
+            // the dispatch matrix in LLMStepExecutor isn't a fit
+            // here (no multimodal / streaming / structured-output
+            // axes) so we open-code the retry loop briefly.
+            let attempts = step.retryPolicy?.maxAttempts ?? 1
+            var lastError: any Error = WorkflowEngineError.underlying("no attempts ran")
+            for attempt in 1...attempts {
+                if let delay = step.retryPolicy?.delayBeforeAttempt(attempt) {
+                    try await Task.sleep(for: delay)
+                }
+                do {
+                    let result = try await Self.runWithOptionalTimeout(
+                        stepID: step.id,
+                        timeout: step.timeout
+                    ) {
+                        try await executor.run(
+                            agentDefinitionID: step.agentDefinitionID,
+                            inputs: rendered,
+                            maxSteps: step.maxSteps,
+                            attended: effectiveAttended
+                        )
+                    }
+                    var next = state
+                    next.bindings[step.outputBinding] = result.asBinding
+                    return next
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    lastError = error
+                    let category = classifier.classify(error)
+                    let willRetry = attempt < attempts
+                        && category.map { step.retryPolicy?.retryOn.contains($0) ?? false } ?? false
+                    guard willRetry else {
+                        throw error
+                    }
+                    let nextDelay = step.retryPolicy?.delayBeforeAttempt(attempt + 1)
+                    await sink?.emit(.stepRetrying(
+                        nodeID: step.id,
+                        attempt: attempt,
+                        nextDelay: nextDelay,
+                        error: error.localizedDescription
+                    ))
+                }
+            }
+            throw lastError
+        })
+    }
+
+    /// Small race helper shared by the SubAgent retry loop. Plain
+    /// pass-through when no timeout is set; otherwise the same
+    /// `TaskGroup` pattern `LLMStepExecutor` uses.
+    static func runWithOptionalTimeout<T: Sendable>(
+        stepID: UUID,
+        timeout: Duration?,
+        operation: @Sendable @escaping () async throws -> T
+    ) async throws -> T {
+        guard let timeout else {
+            return try await operation()
+        }
+        return try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: timeout)
+                throw WorkflowEngineError.stepTimedOut(stepID: stepID, after: timeout)
+            }
+            guard let value = try await group.next() else {
+                throw WorkflowEngineError.underlying("subAgent task group produced no value")
+            }
+            group.cancelAll()
+            return value
+        }
     }
 }

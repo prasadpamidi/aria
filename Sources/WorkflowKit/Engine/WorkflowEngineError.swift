@@ -43,6 +43,32 @@ public enum WorkflowEngineError: LocalizedError, Sendable, Equatable {
     /// *which* body step is the problem instead of just
     /// surfacing "error 7".
     case loopBodyContainsUnsupportedNode(String)
+    /// Compile-time pre-flight discovered an `LLMStep` whose
+    /// declared requirements aren't met by the resolved provider.
+    /// `requirement` is a short human-readable label
+    /// ("vision modality", "streaming structured output",
+    /// "mid-turn tools"); `providerLabel` identifies the provider
+    /// for the error message. Added in 0.2.0.
+    case providerCapabilityMissing(stepID: UUID, requirement: String, providerLabel: String)
+    /// An `LLMStep` opted into multimodal input but the runner
+    /// couldn't resolve one of the `attachmentBindings` into a
+    /// valid `ContentBlock`. Names the binding so the editor /
+    /// host can surface "attach an image to `photo`" guidance.
+    /// Added in 0.2.0.
+    case multimodalAttachmentInvalid(binding: String, reason: String)
+    /// A `SubAgentStep` ran but the compiler was constructed
+    /// without a `SubAgentExecutor`. Configuration gap rather
+    /// than a runtime fault. Added in 0.2.0.
+    case subAgentExecutorUnavailable
+    /// A retry policy was attached to a step but its `retryOn`
+    /// set is empty — the policy can never fire. Surfaces at
+    /// pre-flight so the author fixes the config before tokens
+    /// flow. Added in 0.2.0.
+    case retryPolicyHasNoRetryableErrors(stepID: UUID)
+    /// Per-attempt timeout fired. Carries the configured
+    /// duration so the host can surface "increase the timeout"
+    /// guidance. Added in 0.2.0.
+    case stepTimedOut(stepID: UUID, after: Duration)
     /// Surface for unexpected runtime errors. Carries the
     /// underlying error's description.
     case underlying(String)
@@ -67,6 +93,16 @@ public enum WorkflowEngineError: LocalizedError, Sendable, Equatable {
             "The loop hit its max-iterations cap without the condition going falsy. Tighten the predicate, add a Break early when, or raise Max iterations."
         case let .loopBodyContainsUnsupportedNode(kind):
             "A `\(kind)` step can't live inside a loop body. Remove it from the loop's iteration body."
+        case let .providerCapabilityMissing(_, requirement, providerLabel):
+            "The configured provider (\(providerLabel)) doesn't support `\(requirement)`. Pick a provider that advertises this capability, or remove the requirement from the step."
+        case let .multimodalAttachmentInvalid(binding, reason):
+            "The attachment binding `\(binding)` couldn't be resolved into a content block: \(reason)."
+        case .subAgentExecutorUnavailable:
+            "SubAgent steps need a `SubAgentExecutor` registered on the compiler, but none was provided."
+        case let .retryPolicyHasNoRetryableErrors(stepID):
+            "The retry policy on step \(stepID) has an empty `retryOn` set — it can never fire."
+        case let .stepTimedOut(stepID, after):
+            "Step \(stepID) exceeded its \(after) timeout."
         case let .underlying(message):
             message
         }
