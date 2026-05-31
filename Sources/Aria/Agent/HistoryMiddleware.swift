@@ -1,4 +1,7 @@
 import Foundation
+import Logging
+
+private let historyLogger = Logger(label: "com.aria.agent.history")
 
 // MARK: - HistoryMiddleware
 
@@ -31,6 +34,11 @@ public final class HistoryMiddleware: AgentMiddleware, @unchecked Sendable {
         var newState = state
         newState.messages = loaded + state.messages
         self.locked { self.lastPersistedCount[state.threadId] = loaded.count }
+        let lastPreview = loaded.last.map { Self.preview(of: $0) } ?? "(none)"
+        let beforeRunMessage = "[beforeRun] thread=\(state.threadId) loaded=\(loaded.count) " +
+            "incoming=\(state.messages.count) total=\(newState.messages.count) " +
+            "lastLoaded={\(lastPreview)}"
+        historyLogger.info("\(beforeRunMessage)")
         return newState
     }
 
@@ -40,11 +48,18 @@ public final class HistoryMiddleware: AgentMiddleware, @unchecked Sendable {
         }
         let totalCount = state.messages.count
         guard totalCount > baseline else {
+            historyLogger.debug(
+                "[afterStep] thread=\(state.threadId) no-op baseline=\(baseline) total=\(totalCount)"
+            )
             return state
         }
         let newMessages = Array(state.messages[baseline..<totalCount])
         try await self.history.appendAll(newMessages, threadId: state.threadId)
         self.locked { self.lastPersistedCount[state.threadId] = totalCount }
+        let breakdown = newMessages.map { Self.preview(of: $0) }.joined(separator: " | ")
+        let afterStepMessage = "[afterStep] thread=\(state.threadId) persisted=\(newMessages.count) " +
+            "baseline=\(baseline) total=\(totalCount) deltas={\(breakdown)}"
+        historyLogger.info("\(afterStepMessage)")
         return state
     }
 
@@ -53,6 +68,17 @@ public final class HistoryMiddleware: AgentMiddleware, @unchecked Sendable {
     private let history: any ChatHistory
     private let lock = NSLock()
     private var lastPersistedCount: [String: Int] = [:]
+
+    /// Compact role + truncated-text rendering used by the log lines so
+    /// you can see WHAT moved through history without dumping multi-KB
+    /// JSON blobs into the log buffer.
+    private static func preview(of message: Message) -> String {
+        let text = message.textContent
+        let trimmed = text.count > 80
+            ? String(text.prefix(80)) + "…"
+            : text
+        return "\(message.role.rawValue):\(trimmed)"
+    }
 
     private func locked<T>(_ block: () -> T) -> T {
         self.lock.lock()
