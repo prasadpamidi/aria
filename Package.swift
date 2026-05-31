@@ -244,6 +244,7 @@ let package = Package(
             dependencies: [
                 "Aria",
                 .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "Logging", package: "swift-log"),
             ],
             path: "Sources/AriaApple"
         ),

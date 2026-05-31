@@ -2,7 +2,10 @@
     import Aria
     import Foundation
     import FoundationModels
+    import Logging
     import Tracing
+
+    private let structuredLogger = Logger(label: "com.aria.agent.structured")
 
     // MARK: - Agent + structured response
 
@@ -37,7 +40,8 @@
         ///   a non-FM provider.
         public func respond<Content: Generable & Sendable>(
             _ input: AgentInput,
-            as type: Content.Type
+            as type: Content.Type,
+            transcriptText: (@Sendable (Content) -> String)? = nil
         ) -> AsyncThrowingStream<StructuredResponseEvent<Content>, any Error>
         where Content.PartiallyGenerated: Sendable {
             AsyncThrowingStream { continuation in
@@ -54,6 +58,7 @@
                         await self.runStructuredHandlingErrors(
                             input: input,
                             type: type,
+                            transcriptText: transcriptText,
                             continuation: continuation
                         )
                     }
@@ -67,10 +72,16 @@
         private func runStructuredHandlingErrors<Content: Generable & Sendable>(
             input: AgentInput,
             type: Content.Type,
+            transcriptText: (@Sendable (Content) -> String)?,
             continuation: AsyncThrowingStream<StructuredResponseEvent<Content>, any Error>.Continuation
         ) async where Content.PartiallyGenerated: Sendable {
             do {
-                try await self.runStructured(input: input, type: type, continuation: continuation)
+                try await self.runStructured(
+                    input: input,
+                    type: type,
+                    transcriptText: transcriptText,
+                    continuation: continuation
+                )
             } catch is CancellationError {
                 continuation.finish(throwing: AgentError.cancelled)
             } catch let error as AgentError {
@@ -88,6 +99,7 @@
         private func runStructured<Content: Generable & Sendable>(
             input: AgentInput,
             type: Content.Type,
+            transcriptText: (@Sendable (Content) -> String)?,
             continuation: AsyncThrowingStream<StructuredResponseEvent<Content>, any Error>.Continuation
         ) async throws where Content.PartiallyGenerated: Sendable {
             let threadId = self.config.threadId ?? UUID().uuidString
@@ -123,10 +135,33 @@
                 }
 
             // Append the final structured response so HistoryMiddleware
-            // captures it on `afterStep`. Encoded as JSON because
-            // `Message.assistant` is text-only.
+            // captures it on `afterStep`. Two shapes:
+            //  - `transcriptText` supplied → render prose (typically the
+            //    user-visible acknowledgement + a brief inventory of the
+            //    structured payload). Use this when the persisted turn
+            //    will be replayed to the model on the next turn — JSON
+            //    is a much weaker grounding surface than English for
+            //    follow-up reasoning ("make them gluten-free" needs an
+            //    antecedent it can read).
+            //  - omitted → JSON-encode via `encodeFinal`. Backward-
+            //    compatible default; appropriate when the transcript is
+            //    consumed by something that re-decodes the schema, not
+            //    by an LLM that needs to read it.
             if let final = finalContent {
-                state.messages.append(.assistant(Self.encodeFinal(final)))
+                let text: String =
+                    if let transcriptText {
+                        transcriptText(final)
+                    } else {
+                        Self.encodeFinal(final)
+                    }
+                let preview = text.count > 200
+                    ? String(text.prefix(200)) + "…(\(text.count) chars)"
+                    : text
+                let shape = transcriptText == nil ? "json" : "prose"
+                structuredLogger.info(
+                    "[respond] persist-transcript thread=\(state.threadId) shape=\(shape) text=\"\(preview)\""
+                )
+                state.messages.append(.assistant(text))
             }
 
             state = try await self.applyMiddleware(state) { mw, current in
@@ -135,6 +170,17 @@
             let finalEvent = AgentEvent.finish(.endTurn)
             state = try await self.applyMiddleware(state) { mw, current in
                 try await mw.afterRun(current, finalEvent: finalEvent)
+            }
+            // Yield `.finish` ONLY after `afterStep` / `afterRun` have
+            // completed (so HistoryMiddleware has flushed to storage).
+            // Yielding earlier and letting the consumer break out of
+            // the iterator races the persistence task to cancellation
+            // and silently loses the turn.
+            if let final = finalContent {
+                structuredLogger.info(
+                    "[respond] yield-finish thread=\(state.threadId) state.messages.count=\(state.messages.count)"
+                )
+                continuation.yield(.finish(final))
             }
             continuation.finish()
         }
@@ -157,8 +203,18 @@
                     Self.recordToolCall(call: call, result: result, in: &state)
                     continuation.yield(event)
                 case let .finish(content):
+                    // DO NOT yield `.finish` here. The caller breaks out
+                    // of the iterator on `.finish`, which drops the
+                    // stream's continuation and triggers the
+                    // `onTermination { task.cancel() }` set on the
+                    // outer `AsyncThrowingStream`. That cancellation
+                    // races with the persistence + `afterStep` block at
+                    // the bottom of `runStructured` and frequently wins
+                    // — so the HistoryMiddleware write to GRDB never
+                    // completes, and the next turn loads an empty
+                    // transcript. Capture the content here; `runStructured`
+                    // yields `.finish` only after persistence is done.
                     finalContent = content
-                    continuation.yield(event)
                 }
             }
             return finalContent
@@ -222,9 +278,10 @@
             }
             do {
                 let generated = try GeneratedContent(json: trimmed)
-                let value = try Content(generated)
-                continuation.yield(.finish(value))
-                return value
+                return try Content(generated)
+                // Same persistence-race rule as the FM path: do NOT
+                // yield `.finish` here. `runStructured` yields it after
+                // `afterStep` has actually completed the GRDB write.
             } catch {
                 throw AgentError.providerFailed(
                     "Failed to decode \(type) from provider text: \(error)",
