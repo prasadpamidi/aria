@@ -42,7 +42,16 @@
         public let modelIdentifier: String
 
         public func embed(_ texts: [String]) async throws -> [[Float]] {
-            texts.map { text in
+            // Serialize: `NLEmbedding.vector(for:)` crashes with
+            // `EXC_BAD_ACCESS` under concurrent access despite Apple's
+            // docs claiming thread-safety. Observed in production when
+            // multiple memory writers fire fire-and-forget Tasks. A
+            // single lock around the per-text call is enough — embed
+            // calls are short and a sequential pass through a batch
+            // beats a crash.
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return texts.map { text in
                 guard let vector = embedding.vector(for: text) else {
                     return Array(repeating: Float(0), count: self.dimensions)
                 }
@@ -52,11 +61,8 @@
 
         // MARK: Private
 
-        /// `NLEmbedding` is a class without a `Sendable` conformance,
-        /// but its public surface is read-only and Apple's docs note it
-        /// is safe to share across threads. We mark the wrapper
-        /// `@unchecked Sendable` to opt into that guarantee explicitly.
         private let embedding: NLEmbedding
+        private let lock = NSLock()
     }
 
 #endif
