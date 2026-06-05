@@ -70,7 +70,7 @@ import WorkflowKit
             // window middleware drops them.
             var middleware: [any AgentMiddleware] = [HistoryMiddleware(history: history)]
             middleware.append(contentsOf: self.extraMiddleware(definition))
-            middleware.append(contentsOf: [
+            let tail: [any AgentMiddleware] = [
                 HistoryWindowMiddleware(maxTurns: Self.windowMaxTurns, maxTokens: Self.windowMaxTokens),
                 CheckpointMiddleware(
                     checkpointer: self.checkpointer,
@@ -79,7 +79,8 @@ import WorkflowKit
                     onCheckpoint: onCheckpoint
                 ),
                 RecordingMiddleware(recorder: recorder),
-            ])
+            ]
+            middleware.append(contentsOf: tail)
 
             return Agent(config: AgentConfig(
                 provider: provider,
