@@ -62,6 +62,7 @@ import WorkflowKit
             broker: CapabilityBroker,
             skillProvider: SkillProvider?,
             extraTools: @escaping AgentExtraToolsProvider,
+            extraMiddleware: @escaping AgentExtraMiddlewareProvider = { _ in [] },
             makeProvider: @escaping AgentProviderFactory
         ) {
             guard self.shared == nil else {
@@ -81,6 +82,7 @@ import WorkflowKit
                 checkpointer: checkpointer,
                 runStore: runStore,
                 extraTools: extraTools,
+                extraMiddleware: extraMiddleware,
                 makeProvider: makeProvider
             )
             self.shared = AgentRuntime(

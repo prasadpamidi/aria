@@ -3,6 +3,7 @@
     import Aria
     import Foundation
     import NaturalLanguage
+    import os
 
     // MARK: - NLEmbeddingEmbedder
 
@@ -42,21 +43,27 @@
         public let modelIdentifier: String
 
         public func embed(_ texts: [String]) async throws -> [[Float]] {
-            texts.map { text in
-                guard let vector = embedding.vector(for: text) else {
-                    return Array(repeating: Float(0), count: self.dimensions)
+            // Serialize: `NLEmbedding.vector(for:)` crashes with
+            // `EXC_BAD_ACCESS` and libmalloc heap corruption under
+            // concurrent access despite Apple's docs claiming
+            // thread-safety. `OSAllocatedUnfairLock.withLock` is the
+            // async-safe scoped-locking primitive; the closure body is
+            // sync (no awaits inside) so it satisfies the no-suspend
+            // rule and serializes the embedder calls.
+            self.lock.withLock {
+                texts.map { text in
+                    guard let vector = embedding.vector(for: text) else {
+                        return Array(repeating: Float(0), count: self.dimensions)
+                    }
+                    return vector.map { Float($0) }
                 }
-                return vector.map { Float($0) }
             }
         }
 
         // MARK: Private
 
-        /// `NLEmbedding` is a class without a `Sendable` conformance,
-        /// but its public surface is read-only and Apple's docs note it
-        /// is safe to share across threads. We mark the wrapper
-        /// `@unchecked Sendable` to opt into that guarantee explicitly.
         private let embedding: NLEmbedding
+        private let lock = OSAllocatedUnfairLock()
     }
 
 #endif

@@ -34,6 +34,7 @@ import WorkflowKit
         let checkpointer: any Checkpointer
         let runStore: AgentRunStore
         let extraTools: AgentExtraToolsProvider
+        let extraMiddleware: AgentExtraMiddlewareProvider
         let makeProvider: AgentProviderFactory
 
         func compile(
@@ -60,8 +61,16 @@ import WorkflowKit
             let provider = self.makeProvider(definition, kits.map(\.factory), systemPrompt)
             let tools = provider.capabilities.supportsToolUse ? kits.map(\.anyTool) : []
 
-            let middleware: [any AgentMiddleware] = [
-                HistoryMiddleware(history: history),
+            // Extras are inserted between HistoryMiddleware and
+            // HistoryWindowMiddleware so summarization sees the full
+            // loaded history before the window cap engages. RAG +
+            // fact-extraction don't care about positioning (their hooks
+            // are time-based not state-pipeline-based), but summarization
+            // strictly does — it has to compress older turns BEFORE the
+            // window middleware drops them.
+            var middleware: [any AgentMiddleware] = [HistoryMiddleware(history: history)]
+            middleware.append(contentsOf: self.extraMiddleware(definition))
+            let tail: [any AgentMiddleware] = [
                 HistoryWindowMiddleware(maxTurns: Self.windowMaxTurns, maxTokens: Self.windowMaxTokens),
                 CheckpointMiddleware(
                     checkpointer: self.checkpointer,
@@ -71,6 +80,7 @@ import WorkflowKit
                 ),
                 RecordingMiddleware(recorder: recorder),
             ]
+            middleware.append(contentsOf: tail)
 
             return Agent(config: AgentConfig(
                 provider: provider,
