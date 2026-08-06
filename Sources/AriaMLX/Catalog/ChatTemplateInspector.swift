@@ -4,22 +4,28 @@
     // MARK: - ChatTemplateInspector
 
     /// Detect whether a model's chat template understands `tools` by
-    /// scanning the `chat_template` Jinja in `tokenizer_config.json`.
+    /// scanning the model's Jinja chat template.
     ///
     /// Hugging Face has no canonical "supports_tools" field, so the most
     /// reliable runtime signal is checking for `tools`/`tool_calls`
     /// references in the template itself. Used as a fallback for
     /// user-added models that aren't in `MLXModelCatalog`.
+    ///
+    /// Two on-disk layouts are supported. The original embeds the
+    /// template as a `chat_template` string inside
+    /// `tokenizer_config.json`; the newer convention ships a
+    /// standalone `chat_template.jinja` and drops the JSON key
+    /// entirely. Repos using only the latter — every mlx-community
+    /// LFM2.5 conversion, for one — would otherwise read as "no tool
+    /// support" and have tooling silently disabled.
     public enum ChatTemplateInspector {
-        /// Inspect the model directory's `tokenizer_config.json` for
-        /// tool-call references. Returns `false` on any I/O or parse
+        // MARK: Public
+
+        /// Inspect the model directory for tool-call references in
+        /// its chat template. Returns `false` on any I/O or parse
         /// error — better to silently disable tools than crash a chat.
         public static func detectToolSupport(in modelDirectory: URL) -> Bool {
-            let configURL = modelDirectory.appendingPathComponent("tokenizer_config.json")
-            guard let data = try? Data(contentsOf: configURL),
-                  let parsed = try? JSONSerialization.jsonObject(with: data),
-                  let dict = parsed as? [String: Any],
-                  let template = dict["chat_template"] as? String else {
+            guard let template = loadTemplate(in: modelDirectory) else {
                 return false
             }
             return Self.templateReferencesTools(template)
@@ -41,6 +47,29 @@
                 "[TOOL_CALLS]",
             ]
             return needles.contains { template.contains($0) }
+        }
+
+        // MARK: Internal
+
+        /// Read the model's chat template from whichever of the two
+        /// supported layouts is present, preferring the standalone
+        /// `chat_template.jinja`. When a repo ships both, the
+        /// standalone file is the newer of the two by convention.
+        static func loadTemplate(in modelDirectory: URL) -> String? {
+            let jinjaURL = modelDirectory.appendingPathComponent("chat_template.jinja")
+            if let jinja = try? String(contentsOf: jinjaURL, encoding: .utf8),
+               !jinja.isEmpty {
+                return jinja
+            }
+
+            let configURL = modelDirectory.appendingPathComponent("tokenizer_config.json")
+            guard let data = try? Data(contentsOf: configURL),
+                  let parsed = try? JSONSerialization.jsonObject(with: data),
+                  let dict = parsed as? [String: Any],
+                  let template = dict["chat_template"] as? String else {
+                return nil
+            }
+            return template
         }
     }
 #endif
