@@ -16,8 +16,13 @@
         /// Ordered roughly by RAM footprint.
         public static let defaults: [MLXModelCapabilities] = [
             .qwen35MLX0_8B4bit,
+            .lfm25_350M6bit,
+            .lfm25VL450M6bit,
             .qwen25Instruct1_5B4bit,
+            .lfm25Instruct1_2B4bit,
+            .lfm25Thinking1_2B4bit,
             .gemma2Instruct4bit,
+            .lfm25VL1_6B4bit,
             .llama32Instruct4bit,
             .qwen35MLX4B4bit,
             .gemma4E2BInstruct4bit,
@@ -189,6 +194,144 @@
             supportsVision: true,
             reliability: .medium, // 2 B effective params
             recommendedRAMGigabytes: 8
+        )
+
+        // MARK: LFM2.5 (Liquid AI)
+
+        //
+        // Hybrid convolution + attention models. The text variants
+        // load as `model_type: "lfm2"` via `MLXLLM.LLMModelFactory`;
+        // the VL variants as `"lfm2_vl"` via `MLXVLM.VLMModelFactory`.
+        // Both are already registered in `mlx-swift-lm`, so these
+        // entries are pure metadata — no provider-side work needed.
+        //
+        // All five emit pythonic tool calls wrapped in the
+        // `<|tool_call_start|>` / `<|tool_call_end|>` special tokens,
+        // which `ToolCallFormat.lfm2` parses via
+        // `PythonicToolCallParser`. `ToolCallFormat.infer` would also
+        // match these (it accepts any `lfm2*` model_type), but the
+        // format is set explicitly here to match how the rest of the
+        // catalog carries hand-checked flags.
+        //
+        // `family: "lfm2.5"` deliberately matches none of the
+        // `usesQwenToolFormat` / `usesLlama3ToolFormat` /
+        // `usesGemma4ToolFormat` prefixes, so `MLXProvider` leaves
+        // parsing to `mlx-swift-lm` rather than routing raw chunks
+        // through an Aria-side stream parser.
+        //
+        // Every variant advertises a 128k context window in
+        // `config.json`. That is the model's trained maximum, not a
+        // promise about KV-cache headroom on a phone — the same
+        // caveat that already applies to the 131k Qwen entries.
+
+        /// Liquid AI LFM2.5 350M, 6-bit quantization. Smallest entry
+        /// in the catalog at ~364 MiB. mlx-community never published
+        /// a plain 4-bit at this size, and 4-bit on a sub-500M model
+        /// costs more quality than the ~90 MiB it would save, so
+        /// 6-bit is the floor here.
+        public static let lfm25_350M6bit = MLXModelCapabilities(
+            id: "mlx-community/LFM2.5-350M-6bit",
+            displayName: "LFM2.5 350M (6-bit)",
+            family: "lfm2.5",
+            approximateDiskBytes: 381_000_000, // ~364 MiB on disk
+            contextWindow: 128_000,
+            supportsTools: true,
+            reliability: .low,
+            recommendedRAMGigabytes: 2,
+            toolCallFormat: .lfm2
+        )
+
+        /// Liquid AI LFM2.5 VL 450M, 6-bit quantization. Smallest
+        /// vision-capable entry in the catalog — ~450 MiB, which
+        /// undercuts the Qwen 3.5 0.8B by a comfortable margin.
+        /// Like the 350M, no plain 4-bit exists upstream.
+        ///
+        /// The `requiresOpenAIToolShapeOverride: true` is *not*
+        /// boilerplate. Alone among the five LFM2.5 entries, the
+        /// chat template shipped in this quantized repo renders
+        /// prior tool round-trips through a `render_tool_calls`
+        /// macro reading `message.tool_calls`, so `MLXProvider` has
+        /// to emit OpenAI-shaped messages or the assistant's tool
+        /// call vanishes from history between agent turns. Its four
+        /// siblings render plain `content` and must NOT get that
+        /// treatment. Re-verify if this entry is ever repointed at a
+        /// freshly converted repo.
+        public static let lfm25VL450M6bit = MLXModelCapabilities(
+            id: "mlx-community/LFM2.5-VL-450M-6bit",
+            displayName: "LFM2.5 VL 450M (6-bit)",
+            family: "lfm2.5",
+            kind: .vision,
+            approximateDiskBytes: 471_000_000, // ~450 MiB on disk
+            contextWindow: 128_000,
+            supportsTools: true,
+            supportsVision: true,
+            reliability: .low,
+            recommendedRAMGigabytes: 2,
+            toolCallFormat: .lfm2,
+            requiresOpenAIToolShapeOverride: true
+        )
+
+        /// Liquid AI LFM2.5 1.2B Instruct, 4-bit quantization. The
+        /// mainstream pick of the family — ~633 MiB, undercutting
+        /// Qwen 2.5 1.5B by a third at comparable quality.
+        /// Non-reasoning: streams its answer directly, so
+        /// `supportsReasoning` stays `false` and the Thinking pill
+        /// never fires.
+        public static let lfm25Instruct1_2B4bit = MLXModelCapabilities(
+            id: "mlx-community/LFM2.5-1.2B-Instruct-4bit",
+            displayName: "LFM2.5 1.2B Instruct (4-bit)",
+            family: "lfm2.5",
+            approximateDiskBytes: 663_000_000, // ~633 MiB on disk
+            contextWindow: 128_000,
+            supportsTools: true,
+            reliability: .low,
+            recommendedRAMGigabytes: 3,
+            toolCallFormat: .lfm2
+        )
+
+        /// Liquid AI LFM2.5 1.2B Thinking, 4-bit quantization. Same
+        /// size and architecture as the Instruct variant, tuned to
+        /// emit a `<think>…</think>` block before the visible reply.
+        /// `<think>` / `</think>` are real special tokens in this
+        /// tokenizer, so the existing reasoning plumbing — the chat
+        /// Thinking pill and `VoiceController`'s TTS strip regex —
+        /// works unchanged.
+        ///
+        /// This is the only LFM2.5 entry with
+        /// `supportsReasoning: true`. Several siblings ship
+        /// templates that *handle* a `thinking` field when rendering
+        /// past turns, but handling one is not the same as emitting
+        /// one; flagging them would flash the Thinking pill on every
+        /// turn for models that stream answers directly.
+        public static let lfm25Thinking1_2B4bit = MLXModelCapabilities(
+            id: "mlx-community/LFM2.5-1.2B-Thinking-4bit",
+            displayName: "LFM2.5 1.2B Thinking (4-bit)",
+            family: "lfm2.5",
+            approximateDiskBytes: 663_000_000, // ~633 MiB on disk
+            contextWindow: 128_000,
+            supportsTools: true,
+            supportsReasoning: true,
+            reliability: .low,
+            recommendedRAMGigabytes: 3,
+            toolCallFormat: .lfm2
+        )
+
+        /// Liquid AI LFM2.5 VL 1.6B, 4-bit quantization. The
+        /// higher-quality vision option — ~1.4 GiB, still well under
+        /// the 2.4 GiB Qwen 3.5 4B. Pre-registered as
+        /// `lfm2_5_vl_1_6B_4bit` in `MLXVLM.VLMRegistry`.
+        public static let lfm25VL1_6B4bit = MLXModelCapabilities(
+            id: "mlx-community/LFM2.5-VL-1.6B-4bit",
+            displayName: "LFM2.5 VL 1.6B (4-bit)",
+            family: "lfm2.5",
+            kind: .vision,
+            approximateDiskBytes: 1_496_000_000, // ~1.39 GiB on disk
+            contextWindow: 128_000,
+            supportsTools: true,
+            supportsVision: true,
+            reliability: .low,
+            recommendedRAMGigabytes: 4,
+            toolCallFormat: .lfm2
         )
     }
 #endif

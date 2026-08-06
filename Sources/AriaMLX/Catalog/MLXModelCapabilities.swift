@@ -77,7 +77,8 @@
             supportsReasoning: Bool = false,
             reliability: MLXModelReliability = .medium,
             recommendedRAMGigabytes: Int = 4,
-            toolCallFormat: ToolCallFormat? = nil
+            toolCallFormat: ToolCallFormat? = nil,
+            requiresOpenAIToolShapeOverride: Bool? = nil
         ) {
             self.id = id
             self.displayName = displayName
@@ -91,6 +92,7 @@
             self.reliability = reliability
             self.recommendedRAMGigabytes = recommendedRAMGigabytes
             self.toolCallFormat = toolCallFormat
+            self.requiresOpenAIToolShapeOverride = requiresOpenAIToolShapeOverride
         }
 
         // MARK: Public
@@ -168,6 +170,27 @@
         /// parser handle it via family-based routing.
         public let toolCallFormat: ToolCallFormat?
 
+        /// Per-model answer to "does this chat template need the
+        /// OpenAI Chat Completions message shape?", overriding the
+        /// family-level inference in `requiresOpenAIToolShape`.
+        /// `nil` (the default) keeps the family fallback.
+        ///
+        /// Needed because the question isn't always uniform within a
+        /// family. LFM2.5 is the motivating case: the VL 450M
+        /// template renders `message.tool_calls` through a
+        /// `render_tool_calls` macro, while its four siblings — the
+        /// 350M, both 1.2B variants, and VL 1.6B — render prior
+        /// turns as plain `content`. Feeding OpenAI-shaped messages
+        /// to the latter would drop the assistant's tool call from
+        /// history entirely, since their templates never read the
+        /// `tool_calls` field.
+        ///
+        /// Note this tracks the template *as published in the
+        /// quantized repo we download*, which can lag the model
+        /// author's canonical template. Re-check when bumping a
+        /// catalog entry to a freshly converted repo.
+        public let requiresOpenAIToolShapeOverride: Bool?
+
         /// `true` for models in the Gemma 4 family. Their chat
         /// template emits a tool-call format
         /// (`<|tool_call>call:NAME{...}<tool_call|>`) that no
@@ -221,8 +244,15 @@
         /// its `tool_call_id` — so Llama never realizes the tool
         /// was called or what it returned, and can't produce a
         /// follow-up reply that reads the result.
+        ///
+        /// Entries may answer this themselves via
+        /// `requiresOpenAIToolShapeOverride`; the family checks below
+        /// are the fallback for entries that don't.
         public var requiresOpenAIToolShape: Bool {
-            self.usesGemma4ToolFormat
+            if let override = self.requiresOpenAIToolShapeOverride {
+                return override
+            }
+            return self.usesGemma4ToolFormat
                 || self.usesLlama3ToolFormat
                 || self.family == "qwen3.5-vl"
         }
