@@ -72,7 +72,8 @@ public struct ProviderCapabilities: Sendable, Equatable, Codable {
         supportsAudio: Bool = false,
         supportsStructuredOutput: Bool = false,
         supportsSystemPrompt: Bool = true,
-        maxContextTokens: Int? = nil
+        maxContextTokens: Int? = nil,
+        usableContextTokens: Int? = nil
     ) {
         self.modelIdentifier = modelIdentifier
         self.supportsStreaming = supportsStreaming
@@ -83,6 +84,7 @@ public struct ProviderCapabilities: Sendable, Equatable, Codable {
         self.supportsStructuredOutput = supportsStructuredOutput
         self.supportsSystemPrompt = supportsSystemPrompt
         self.maxContextTokens = maxContextTokens
+        self.usableContextTokens = usableContextTokens
     }
 
     // MARK: Public
@@ -95,7 +97,28 @@ public struct ProviderCapabilities: Sendable, Equatable, Codable {
     public let supportsAudio: Bool
     public let supportsStructuredOutput: Bool
     public let supportsSystemPrompt: Bool
+
+    /// Context length the model advertises.
     public let maxContextTokens: Int?
+
+    /// Context length the model can be driven at *in this deployment*,
+    /// which is often well below what it advertises.
+    ///
+    /// The gap is widest on-device. An MLX model may declare a 128k
+    /// window in `config.json` — its trained maximum — while the KV
+    /// cache for even a fraction of that exceeds a phone's memory
+    /// budget. Budgeting against the advertised figure produces a limit
+    /// that is never reached and therefore never protects anything.
+    ///
+    /// `nil` means unknown; callers should fall back to
+    /// `maxContextTokens` and treat the result as advisory.
+    public let usableContextTokens: Int?
+
+    /// Best available context figure: usable when known, advertised
+    /// otherwise.
+    public var effectiveContextTokens: Int? {
+        self.usableContextTokens ?? self.maxContextTokens
+    }
 }
 
 // MARK: - GenerationOptions
