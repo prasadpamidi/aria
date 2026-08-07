@@ -30,6 +30,13 @@ public protocol ToolSelector: Sendable {
     ) async -> [ToolDefinition]
 }
 
+extension Character {
+    /// Vowel test used by suffix folding's doubled-consonant rule.
+    fileprivate var isVowel: Bool {
+        "aeiou".contains(self)
+    }
+}
+
 // MARK: - LexicalToolSelector
 
 /// Term-overlap ranking with inverse-document-frequency weighting.
@@ -124,7 +131,7 @@ public struct LexicalToolSelector: ToolSelector {
 
         func flush() {
             if current.count > 1 {
-                terms.append(current.lowercased())
+                terms.append(Self.fold(current.lowercased()))
             }
             current = ""
         }
@@ -146,6 +153,38 @@ public struct LexicalToolSelector: ToolSelector {
         return terms
     }
 
+    /// Collapse the commonest English inflections so a query and a
+    /// description can agree without matching character-for-character.
+    ///
+    /// "meals" should reach `log_meal`; "logging" should reach "log".
+    /// This is not stemming — a real stemmer is a dependency and a
+    /// source of surprising collisions. It handles the three suffixes
+    /// that account for most near-misses and stops there, deliberately
+    /// leaving longer words alone since truncating short ones creates
+    /// false matches ("uses" → "use" is fine, "bus" → "bu" is not).
+    static func fold(_ term: String) -> String {
+        guard term.count > 4 else {
+            return term
+        }
+        for suffix in ["ing", "es", "s"] where term.hasSuffix(suffix) {
+            var stem = String(term.dropLast(suffix.count))
+            guard stem.count >= 3 else {
+                continue
+            }
+            // English doubles a final consonant before "-ing":
+            // shopping → shopp, logging → logg, running → runn.
+            // Leaving the double in place would strand the folded
+            // term away from the plain word a user actually types
+            // ("shop" ≠ "shopp"), which loses the very match this
+            // folding exists to create.
+            if suffix == "ing", let last = stem.last, stem.dropLast().last == last, !last.isVowel {
+                stem = String(stem.dropLast())
+            }
+            return stem
+        }
+        return term
+    }
+
     // MARK: Private
 
     /// Named rather than a tuple so the scoring loop stays cheap for
@@ -158,7 +197,34 @@ public struct LexicalToolSelector: ToolSelector {
 
     private let minimumScore: Double
 
+    /// Name, description, and parameter names.
+    ///
+    /// Parameter names carry real signal that name and description
+    /// often miss. A tool called `log_activity` described as "Record an
+    /// activity" shares no term with "log my run" beyond "log" — but a
+    /// `distance` or `duration` parameter reaches queries the prose
+    /// never will. Schemas are already written; indexing them costs
+    /// nothing and measurably widens recall.
+    ///
+    /// Recall is the failure mode that matters here. A tool ranked too
+    /// low is invisible to the model, which cannot then call it — and
+    /// that is indistinguishable, from the outside, from a model that
+    /// simply refuses to use tools.
     private static func searchableText(for tool: ToolDefinition) -> String {
-        "\(tool.name) \(tool.description)"
+        var parts = [tool.name, tool.description]
+        parts.append(contentsOf: Self.parameterNames(in: tool.inputSchema))
+        return parts.joined(separator: " ")
+    }
+
+    /// Top-level property names of an object schema.
+    ///
+    /// Deliberately shallow: nested schemas describe the shape of a
+    /// value rather than what the tool is *for*, and indexing them
+    /// dilutes IDF with structural noise.
+    private static func parameterNames(in schema: JSONSchema) -> [String] {
+        guard case let .object(properties, _, _, _) = schema else {
+            return []
+        }
+        return Array(properties.keys)
     }
 }

@@ -14,7 +14,9 @@ final class LexicalToolSelectorTests: XCTestCase {
     func testTokenizerSplitsIdentifierConventions() {
         XCTAssertEqual(LexicalToolSelector.tokenize("log_meal"), ["log", "meal"])
         XCTAssertEqual(LexicalToolSelector.tokenize("getWeatherToday"), ["get", "weather", "today"])
-        XCTAssertEqual(LexicalToolSelector.tokenize("shopping-list"), ["shopping", "list"])
+        // "shopping" folds to its stem; folding applies to queries and
+        // descriptions alike, so the pair still meets.
+        XCTAssertEqual(LexicalToolSelector.tokenize("shopping-list"), ["shop", "list"])
     }
 
     /// Single characters carry no signal and inflate every score.
@@ -199,5 +201,76 @@ final class ToolGuidanceTests: XCTestCase {
     /// Guidance is opt-in; existing tools must be unaffected.
     func testGuidanceDefaultsToNil() {
         XCTAssertNil(PlainTool.definition.promptGuidance)
+    }
+}
+
+// MARK: - LexicalToolSelectorRecallTests
+
+/// Recall is the failure mode that matters for tool selection.
+///
+/// A tool ranked too low never reaches the model, which then cannot
+/// call it — indistinguishable from the outside from a model that
+/// simply refuses to use tools. Precision failures cost tokens;
+/// recall failures cost the feature.
+final class LexicalToolSelectorRecallTests: XCTestCase {
+    /// Parameter names carry signal the prose misses.
+    func testParameterNamesAreSearchable() async {
+        let selector = LexicalToolSelector()
+        let tools = [
+            ToolDefinition(
+                name: "rotate_image",
+                description: "Adjust a picture.",
+                inputSchema: .object(properties: ["degrees": .integer()], required: [])
+            ),
+            ToolDefinition(
+                name: "log_activity",
+                description: "Record an activity.",
+                inputSchema: .object(
+                    properties: ["distance": .number(), "duration": .number()],
+                    required: []
+                )
+            ),
+        ]
+        let result = await selector.select(from: tools, query: "record my distance", limit: 1)
+        XCTAssertEqual(result.map(\.name), ["log_activity"])
+    }
+
+    /// Plurals and gerunds are the commonest near-misses.
+    func testInflectionsFoldSoQueriesReachDescriptions() async {
+        let selector = LexicalToolSelector()
+        let tools = [
+            ToolDefinition(
+                name: "convert_currency",
+                description: "Convert between currencies.",
+                inputSchema: .object(properties: [:], required: [])
+            ),
+            ToolDefinition(
+                name: "log_meal",
+                description: "Record a meal.",
+                inputSchema: .object(properties: [:], required: [])
+            ),
+        ]
+        let plural = await selector.select(from: tools, query: "my meals", limit: 1)
+        XCTAssertEqual(plural.map(\.name), ["log_meal"], "\"meals\" should reach \"meal\"")
+
+        let gerund = await selector.select(from: tools, query: "converting money", limit: 1)
+        XCTAssertEqual(gerund.map(\.name), ["convert_currency"], "\"converting\" should reach \"convert\"")
+    }
+
+    /// Folding must not truncate short words into collisions.
+    func testShortWordsAreLeftAlone() {
+        XCTAssertEqual(LexicalToolSelector.fold("bus"), "bus")
+        XCTAssertEqual(LexicalToolSelector.fold("gas"), "gas")
+        XCTAssertEqual(LexicalToolSelector.fold("meals"), "meal")
+    }
+
+    /// English doubles a final consonant before "-ing"; leaving the
+    /// double in would strand the folded term from the plain word.
+    func testDoubledConsonantsCollapseSoStemsMatchPlainWords() {
+        XCTAssertEqual(LexicalToolSelector.fold("shopping"), "shop")
+        XCTAssertEqual(LexicalToolSelector.fold("logging"), "log")
+        XCTAssertEqual(LexicalToolSelector.fold("running"), "run")
+        // No doubling to undo.
+        XCTAssertEqual(LexicalToolSelector.fold("converting"), "convert")
     }
 }
