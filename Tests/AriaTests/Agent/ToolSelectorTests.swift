@@ -158,3 +158,46 @@ final class ContextBudgetTests: XCTestCase {
         XCTAssertEqual(budget.maxTools, 0)
     }
 }
+
+// MARK: - ToolGuidanceTests
+
+/// Guidance has to reach `ToolDefinition` from a typed `Tool`, or the
+/// feature is unusable for the case that motivated it: an app's own
+/// `remember_fact` tool declaring its own policy instead of the app
+/// hand-writing that policy into a system prompt.
+final class ToolGuidanceTests: XCTestCase {
+    private struct GuidedTool: Tool {
+        struct Input: Codable, Sendable {}
+        struct Output: Codable, Sendable {}
+
+        static let name = "remember_fact"
+        static let description = "Store a durable fact about the user."
+        static let inputSchema = JSONSchema.object(properties: [:], required: [])
+        static let promptGuidance: String? = "Store durable first-person facts the user states."
+
+        func call(_: Input, context _: ToolContext) async throws -> Output { Output() }
+    }
+
+    private struct PlainTool: Tool {
+        struct Input: Codable, Sendable {}
+        struct Output: Codable, Sendable {}
+
+        static let name = "get_time"
+        static let description = "Current time."
+        static let inputSchema = JSONSchema.object(properties: [:], required: [])
+
+        func call(_: Input, context _: ToolContext) async throws -> Output { Output() }
+    }
+
+    func testTypedToolCarriesGuidanceIntoItsDefinition() {
+        XCTAssertEqual(
+            GuidedTool.definition.promptGuidance,
+            "Store durable first-person facts the user states."
+        )
+    }
+
+    /// Guidance is opt-in; existing tools must be unaffected.
+    func testGuidanceDefaultsToNil() {
+        XCTAssertNil(PlainTool.definition.promptGuidance)
+    }
+}

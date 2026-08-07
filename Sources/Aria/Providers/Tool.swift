@@ -27,6 +27,19 @@ public protocol Tool: Sendable {
     /// Optional JSON Schema describing the tool's output shape.
     static var outputSchema: JSONSchema? { get }
 
+    /// Optional usage policy, surfaced into the system prompt by
+    /// `ContextAssembler` — and only when this tool is actually sent.
+    ///
+    /// Declare policy here rather than writing it into the app's system
+    /// prompt. Prompt-side policy outlives the tool it describes:
+    /// disable the tool and the model is still instructed at length on
+    /// when to call something it no longer has. Declared here, the two
+    /// cannot drift apart, and a tool that loses tool selection costs
+    /// nothing in instructions either.
+    ///
+    /// Prefer short, positive, imperative phrasing.
+    static var promptGuidance: String? { get }
+
     /// Execute the tool. Return the typed output, or throw to surface a
     /// failure as a tool error to the model.
     func call(_ input: Input, context: ToolContext) async throws -> Output
@@ -37,13 +50,18 @@ extension Tool {
         nil
     }
 
+    public static var promptGuidance: String? {
+        nil
+    }
+
     /// The serializable description of this tool.
     public static var definition: ToolDefinition {
         ToolDefinition(
             name: self.name,
             description: self.description,
             inputSchema: self.inputSchema,
-            outputSchema: self.outputSchema
+            outputSchema: self.outputSchema,
+            promptGuidance: self.promptGuidance
         )
     }
 }
