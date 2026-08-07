@@ -337,3 +337,125 @@ final class ContextAllocationReportingTests: XCTestCase {
         }
     }
 }
+
+// MARK: - ToolFillTests
+
+/// Ranking decides order; the budget decides how many.
+///
+/// Observed in the field: a twenty-tool surface reduced to a single
+/// lexical match on the word "quick", with 97% of the window left
+/// empty and the tool the user needed among the discarded. Sending
+/// only what matched throws away tools that cost nothing to include.
+final class ToolFillTests: XCTestCase {
+    func testUnmatchedToolsFillRemainingBudget() async {
+        let assembler = DefaultContextAssembler()
+        let tools = (0..<20).map {
+            Self.tool(named: "tool_\($0)", description: "Does specific job number \($0).")
+        }
+
+        let assembled = await assembler.assemble(
+            systemPrompt: "System.",
+            tools: tools,
+            // Matches nothing in the corpus.
+            state: AgentState(messages: [.user("zzzz")]),
+            budget: ContextBudget(total: 8192, maxTools: 12)
+        )
+
+        XCTAssertGreaterThan(
+            assembled.tools.count,
+            1,
+            "A budget with room to spare must not ship a near-empty tool set"
+        )
+        XCTAssertLessThanOrEqual(assembled.tools.count, 12)
+    }
+
+    /// When nothing is under pressure, every tool ships untouched and
+    /// in registration order.
+    ///
+    /// Ranking is not run at all here, deliberately. Reordering on a
+    /// weak lexical signal is not free: the field failure that
+    /// motivated this work put a groceries tool first for a recipe
+    /// question on the strength of the word "quick". A stable order
+    /// beats a confidently wrong one.
+    func testAllToolsShipUnrankedWhenNothingIsUnderPressure() async {
+        let assembler = DefaultContextAssembler()
+        let tools = [
+            Self.tool(named: "rotate_image", description: "Rotate an image."),
+            Self.tool(named: "convert_currency", description: "Convert currencies."),
+            Self.tool(named: "log_meal", description: "Record a meal the user ate."),
+        ]
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: tools,
+            state: AgentState(messages: [.user("record the meal I ate")]),
+            budget: ContextBudget(total: 8192, maxTools: 3)
+        )
+
+        XCTAssertEqual(assembled.tools.count, 3)
+        XCTAssertEqual(assembled.tools.map(\.name).first, "rotate_image")
+    }
+
+    /// Once a limit actually binds, relevance leads and the remainder
+    /// fills in behind it.
+    func testRankedToolsLeadOnceFilteringEngages() async {
+        let assembler = DefaultContextAssembler()
+        var tools = [
+            Self.tool(named: "rotate_image", description: "Rotate an image."),
+            Self.tool(named: "convert_currency", description: "Convert currencies."),
+            Self.tool(named: "log_meal", description: "Record a meal the user ate."),
+        ]
+        // Push the surface past the cap so selection has to engage.
+        tools.append(contentsOf: (0..<10).map {
+            Self.tool(named: "filler_\($0)", description: "Unrelated job \($0).")
+        })
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: tools,
+            state: AgentState(messages: [.user("record the meal I ate")]),
+            budget: ContextBudget(total: 8192, maxTools: 5)
+        )
+
+        XCTAssertEqual(assembled.tools.first?.name, "log_meal", "Relevance leads")
+        XCTAssertEqual(assembled.tools.count, 5, "And the budget is still filled")
+    }
+
+    /// Filling stops at the share ceiling — the pressure the whole
+    /// mechanism exists to relieve.
+    func testFillRespectsToolShareCeiling() async {
+        let assembler = DefaultContextAssembler()
+        let tools = (0..<40).map {
+            Self.tool(
+                named: "tool_\($0)",
+                description: String(repeating: "verbose description text ", count: 12)
+            )
+        }
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: tools,
+            state: AgentState(messages: [.user("zzzz")]),
+            budget: ContextBudget(total: 2000, maxTools: nil, maxToolShare: 0.4)
+        )
+
+        let toolTokens = assembled.allocation.toolTokens
+        XCTAssertLessThanOrEqual(
+            toolTokens,
+            Int(Double(assembled.allocation.budgetAvailable) * 0.4) + 50,
+            "Tools must not consume more than their share"
+        )
+        XCTAssertLessThan(assembled.tools.count, 40)
+    }
+
+    private static func tool(named name: String, description: String) -> AnyTool {
+        AnyTool(
+            definition: ToolDefinition(
+                name: name,
+                description: description,
+                inputSchema: .object(properties: ["value": .string()], required: [])
+            ),
+            invoke: { _, _ in .null }
+        )
+    }
+}

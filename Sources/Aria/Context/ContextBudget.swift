@@ -37,14 +37,25 @@ public struct ContextBudget: Sendable, Equatable {
     ///     reliability tiers live in `AriaMLX`, and core must not depend
     ///     on them — so consumers map their own notion of capability
     ///     onto a number here.
+    ///   - maxToolShare: Ceiling on the fraction of `available` that
+    ///     tool definitions may occupy.
+    ///
+    ///     Ranking decides *order*; this decides *how many*. Without
+    ///     it, a selector that finds one lexical match sends one tool
+    ///     and leaves the rest of the window empty — the tools it
+    ///     discarded cost nothing to include and might have been the
+    ///     ones needed. Filtering should be driven by pressure on the
+    ///     budget, not applied unconditionally.
     public init(
         total: Int,
         reservedForOutput: Int = 512,
-        maxTools: Int? = nil
+        maxTools: Int? = nil,
+        maxToolShare: Double = 0.4
     ) {
         self.total = max(0, total)
         self.reservedForOutput = max(0, min(reservedForOutput, self.total))
         self.maxTools = maxTools.map { max(0, $0) }
+        self.maxToolShare = min(max(0, maxToolShare), 1)
     }
 
     // MARK: Public
@@ -57,6 +68,14 @@ public struct ContextBudget: Sendable, Equatable {
 
     /// Maximum tool definitions per call. `nil` disables the cap.
     public let maxTools: Int?
+
+    /// Fraction of `available` that tool definitions may occupy.
+    public let maxToolShare: Double
+
+    /// Token ceiling for tool definitions.
+    public var toolTokenLimit: Int {
+        Int(Double(self.available) * self.maxToolShare)
+    }
 
     /// Tokens the assembler may spend on input.
     public var available: Int {
