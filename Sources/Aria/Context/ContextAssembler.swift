@@ -79,16 +79,28 @@ public struct DefaultContextAssembler: ContextAssembler {
     ///     show anyone what it spent. Delivered as a callback rather
     ///     than an `AgentEvent` case because adding a case to a public
     ///     enum breaks exhaustive switches in shipped consumers.
+    ///   - onAssembled: Receives the finished request — the exact
+    ///     messages and tools handed to the provider.
+    ///
+    ///     Counts answer "how much"; only the text answers "what". The
+    ///     system prompt the model actually reads is composed here, by
+    ///     folding tool guidance into the caller's prompt, so no
+    ///     consumer can reconstruct it from what it passed in. A
+    ///     diagnostic UI that shows token totals but not the prompt
+    ///     leaves the most common question — "what did the model
+    ///     actually see?" — unanswerable.
     public init(
         selector: any ToolSelector = LexicalToolSelector(),
         tokenCounter: any TokenCounter = HeuristicTokenCounter(),
         pinnedToolNames: Set<String> = [],
-        onAllocation: (@Sendable (ContextAllocation) -> Void)? = nil
+        onAllocation: (@Sendable (ContextAllocation) -> Void)? = nil,
+        onAssembled: (@Sendable (AssembledContext) -> Void)? = nil
     ) {
         self.selector = selector
         self.tokenCounter = tokenCounter
         self.pinnedToolNames = pinnedToolNames
         self.onAllocation = onAllocation
+        self.onAssembled = onAssembled
     }
 
     // MARK: Public
@@ -141,11 +153,13 @@ public struct DefaultContextAssembler: ContextAssembler {
         )
         self.onAllocation?(allocation)
 
-        return AssembledContext(
+        let assembled = AssembledContext(
             messages: messages,
             tools: selectedTools,
             allocation: allocation
         )
+        self.onAssembled?(assembled)
+        return assembled
     }
 
     // MARK: Private
@@ -161,6 +175,7 @@ public struct DefaultContextAssembler: ContextAssembler {
     private let tokenCounter: any TokenCounter
     private let pinnedToolNames: Set<String>
     private let onAllocation: (@Sendable (ContextAllocation) -> Void)?
+    private let onAssembled: (@Sendable (AssembledContext) -> Void)?
 
     /// Compose the system prompt with guidance from surviving tools.
     private static func compose(
