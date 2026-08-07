@@ -35,12 +35,14 @@ public struct ToolDefinition: Sendable, Equatable, Codable {
         name: String,
         description: String,
         inputSchema: JSONSchema,
-        outputSchema: JSONSchema? = nil
+        outputSchema: JSONSchema? = nil,
+        promptGuidance: String? = nil
     ) {
         self.name = name
         self.description = description
         self.inputSchema = inputSchema
         self.outputSchema = outputSchema
+        self.promptGuidance = promptGuidance
     }
 
     // MARK: Public
@@ -49,4 +51,22 @@ public struct ToolDefinition: Sendable, Equatable, Codable {
     public let description: String
     public let inputSchema: JSONSchema
     public let outputSchema: JSONSchema?
+
+    /// Usage policy for this tool, emitted into the system prompt by
+    /// `ContextAssembler` — and only when the tool survived selection.
+    ///
+    /// Guidance belongs to the tool rather than to a hand-written
+    /// prompt because the two drift apart otherwise. Policy written
+    /// into an app's system prompt outlives the tool it describes: turn
+    /// the tool off and the model is still instructed at length on when
+    /// to call something it no longer has. Attaching guidance here
+    /// makes that state unrepresentable, and stops unselected tools
+    /// from spending tokens on instructions for capabilities the model
+    /// was never given.
+    ///
+    /// Prefer short, positive, imperative phrasing. Dense negation
+    /// ("ONLY", "do NOT", "never") is what small models follow worst,
+    /// and long policy blocks are prone to being reproduced as output
+    /// rather than obeyed.
+    public let promptGuidance: String?
 }

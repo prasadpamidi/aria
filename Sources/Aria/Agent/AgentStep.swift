@@ -21,13 +21,13 @@ extension Agent {
         continuation: AsyncThrowingStream<AgentEvent, any Error>.Continuation
     ) async throws -> StepOutcome {
         var workingState = state
-        let messagesForProvider = self.buildProviderMessages(state: workingState)
+        let assembled = await self.assembleContext(state: workingState)
 
         continuation.yield(.assistantStart)
 
         let response = try await self.streamProviderResponse(
-            messages: messagesForProvider,
-            executableTools: self.config.tools,
+            messages: assembled.messages,
+            executableTools: assembled.tools,
             continuation: continuation
         )
 
@@ -84,5 +84,49 @@ extension Agent {
         }
         result.append(contentsOf: state.messages)
         return result
+    }
+
+    /// Build the request for this step.
+    ///
+    /// This is the only point in the loop where the system prompt, the
+    /// tool set, and the message history are all in scope — which is
+    /// why context budgeting belongs here rather than in middleware.
+    /// Middleware runs strictly earlier, before the system prompt is
+    /// prepended, and tool definitions never pass through `AgentState`
+    /// at all.
+    ///
+    /// With no assembler configured the behaviour is unchanged from
+    /// before this hook existed: prompt prepended, every tool sent.
+    private func assembleContext(state: AgentState) async -> AssembledContext {
+        guard let assembler = config.contextAssembler else {
+            return AssembledContext(
+                messages: self.buildProviderMessages(state: state),
+                tools: self.config.tools,
+                allocation: ContextAllocation()
+            )
+        }
+
+        let budget = self.config.contextBudget ?? Self.derivedBudget(
+            from: self.config.provider.capabilities
+        )
+        return await assembler.assemble(
+            systemPrompt: self.config.systemPrompt,
+            tools: self.config.tools,
+            state: state,
+            budget: budget
+        )
+    }
+
+    /// Fall back to the provider's own reported window when the caller
+    /// didn't supply a budget.
+    ///
+    /// `effectiveContextTokens` prefers the usable figure over the
+    /// advertised one, which matters on-device where the two can differ
+    /// by more than an order of magnitude. When the provider reports
+    /// nothing, pick a conservative window rather than an unbounded
+    /// one — silently sending an unbounded request is the failure this
+    /// whole mechanism exists to prevent.
+    private static func derivedBudget(from capabilities: ProviderCapabilities) -> ContextBudget {
+        ContextBudget(total: capabilities.effectiveContextTokens ?? 8192)
     }
 }

@@ -18,7 +18,9 @@ public struct AgentConfig: Sendable {
         middleware: [any AgentMiddleware] = [],
         maxSteps: Int = 10,
         parallelToolCalls: Bool = true,
-        toolTimeout: Duration = .seconds(60)
+        toolTimeout: Duration = .seconds(60),
+        contextAssembler: (any ContextAssembler)? = nil,
+        contextBudget: ContextBudget? = nil
     ) {
         self.provider = provider
         self.tools = tools
@@ -29,6 +31,8 @@ public struct AgentConfig: Sendable {
         self.maxSteps = maxSteps
         self.parallelToolCalls = parallelToolCalls
         self.toolTimeout = toolTimeout
+        self.contextAssembler = contextAssembler
+        self.contextBudget = contextBudget
     }
 
     // MARK: Public
@@ -63,6 +67,23 @@ public struct AgentConfig: Sendable {
 
     /// Per-tool execution timeout. Triggers `AgentError.timeout`.
     public let toolTimeout: Duration
+
+    /// Decides what fits in each provider call.
+    ///
+    /// `nil` preserves the historical behaviour exactly: the system
+    /// prompt is prepended, every registered tool is sent, and history
+    /// is bounded only by whatever middleware the caller wired. Opt in
+    /// to get budgeting that can actually see the whole request —
+    /// middleware cannot, since it runs before the system prompt is
+    /// prepended and never observes tool definitions at all.
+    public let contextAssembler: (any ContextAssembler)?
+
+    /// Budget handed to `contextAssembler`. Ignored when no assembler
+    /// is set.
+    ///
+    /// When an assembler is set and this is `nil`, the agent derives a
+    /// budget from `provider.capabilities.effectiveContextTokens`.
+    public let contextBudget: ContextBudget?
 }
 
 extension AgentConfig {
