@@ -136,14 +136,19 @@ public struct DefaultEscalationPolicy: EscalationPolicy {
 /// need no changes — it is simply an `LLMProvider` that happens to have
 /// several inside it.
 ///
-/// **Why reporting tier 0's capabilities is honest.** The request was
-/// assembled against the *smallest* model's budget, and a context that
-/// fits a small model always fits a larger one. Escalation only ever
-/// moves upward, so the assembled request stays valid at every tier.
-/// Routing *downward* would be the unsafe direction, and this type
-/// never does it — which is exactly what a general "pick any model per
-/// call" router could not promise, since it would have to advertise
-/// capabilities that whichever model actually ran might not have.
+/// **Capabilities are the intersection across tiers, not tier 0's.**
+/// A request is assembled once and may be sent to any tier, so it must
+/// be valid for all of them: the smallest context window, and only the
+/// features every tier supports.
+///
+/// An earlier version reported tier 0's, reasoning that a context
+/// fitting a small model always fits a larger one. That is false.
+/// Ladders are ordered by *capability*, and capability does not imply
+/// context length — Apple's on-device model is stronger than a 1.2B at
+/// instruction-following while offering a 4,096-token window against
+/// that model's 6,144. Escalating upward moved downward in context, and
+/// requests budgeted for tier 0 were refused by tier 1 with
+/// `exceededContextWindowSize`.
 ///
 /// **The streaming boundary.** Judging an attempt needs its outcome;
 /// feeling responsive needs streaming. Events are therefore buffered
@@ -199,10 +204,38 @@ public struct TieredLLMProvider: LLMProvider {
 
     // MARK: Public
 
-    /// Tier 0's capabilities — see the type's note on why this is the
-    /// honest answer rather than a union across tiers.
+    /// The conservative intersection across every tier.
+    ///
+    /// A request is assembled once and may be sent to any tier, so it
+    /// has to be valid for all of them: the smallest context window,
+    /// and only the features every tier supports.
+    ///
+    /// This corrects an earlier assumption that tier 0's numbers were
+    /// sufficient, on the reasoning that a context fitting a small
+    /// model always fits a larger one. Escalation ladders are ordered
+    /// by *capability*, and capability does not imply context length.
+    /// Apple's on-device model is the counterexample that broke it:
+    /// stronger than a 1.2B at instruction-following, with a 4,096
+    /// window against that model's 6,144. Escalating upward moved
+    /// downward in context, and a request budgeted for tier 0 was
+    /// refused by tier 1 with `exceededContextWindowSize`.
     public var capabilities: ProviderCapabilities {
-        self.tiers[0].capabilities
+        let all = self.tiers.map(\.capabilities)
+        // Identity stays the primary's — this is that model, with
+        // fallbacks, not a different model.
+        let primary = all[0]
+        return ProviderCapabilities(
+            modelIdentifier: primary.modelIdentifier,
+            supportsStreaming: all.allSatisfy(\.supportsStreaming),
+            supportsToolUse: all.allSatisfy(\.supportsToolUse),
+            supportsParallelToolCalls: all.allSatisfy(\.supportsParallelToolCalls),
+            supportsVision: all.allSatisfy(\.supportsVision),
+            supportsAudio: all.allSatisfy(\.supportsAudio),
+            supportsStructuredOutput: all.allSatisfy(\.supportsStructuredOutput),
+            supportsSystemPrompt: all.allSatisfy(\.supportsSystemPrompt),
+            maxContextTokens: Self.smallestWindow(all, \.maxContextTokens),
+            usableContextTokens: Self.smallestWindow(all, \.usableContextTokens)
+        )
     }
 
     public func stream(
@@ -268,6 +301,19 @@ public struct TieredLLMProvider: LLMProvider {
     private let policy: any EscalationPolicy
     private let validateBeforeYield: Bool
     private let onEscalation: (@Sendable (AttemptOutcome) -> Void)?
+
+    /// Smallest declared window, ignoring tiers that declare none.
+    ///
+    /// A tier reporting `nil` is saying "unknown", not "unlimited" —
+    /// but it cannot constrain a bound it never stated, so it is
+    /// skipped. When no tier declares a window the answer is `nil`,
+    /// and the caller falls back to its own conservative default.
+    private static func smallestWindow(
+        _ capabilities: [ProviderCapabilities],
+        _ keyPath: KeyPath<ProviderCapabilities, Int?>
+    ) -> Int? {
+        capabilities.compactMap { $0[keyPath: keyPath] }.min()
+    }
 
     private func runTiers(
         knownToolNames: Set<String>,

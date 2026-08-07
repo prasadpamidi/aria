@@ -173,20 +173,85 @@ final class TieredLLMProviderTests: XCTestCase {
 
     // MARK: - Capabilities and shape
 
-    /// Tier 0's window is what the context was assembled against, and a
-    /// context that fits a small model always fits a larger one.
-    func testCapabilitiesComeFromTheFirstTier() {
-        let weak = MockLLMProvider(
-            scenes: [.text("x")],
-            capabilities: ProviderCapabilities(modelIdentifier: "small", usableContextTokens: 4096)
-        )
-        let strong = MockLLMProvider(
-            scenes: [.text("y")],
-            capabilities: ProviderCapabilities(modelIdentifier: "large", usableContextTokens: 128_000)
-        )
-        let tiered = TieredLLMProvider(tiers: [weak, strong])
-
+    /// Identity is the primary's — this is that model with fallbacks,
+    /// not a different model.
+    func testIdentityComesFromTheFirstTier() {
+        let tiered = TieredLLMProvider(tiers: [
+            MockLLMProvider(
+                scenes: [.text("x")],
+                capabilities: ProviderCapabilities(modelIdentifier: "small", usableContextTokens: 4096)
+            ),
+            MockLLMProvider(
+                scenes: [.text("y")],
+                capabilities: ProviderCapabilities(modelIdentifier: "large", usableContextTokens: 128_000)
+            ),
+        ])
         XCTAssertEqual(tiered.capabilities.modelIdentifier, "small")
+    }
+
+    /// A request is assembled once and may go to any tier, so it must
+    /// fit the smallest window — not tier 0's.
+    ///
+    /// Ladders are ordered by capability, and capability does not
+    /// imply context length. Apple's on-device model is the case that
+    /// broke the original assumption: stronger than a 1.2B, with a
+    /// 4,096 window against that model's 6,144. Budgeting for tier 0
+    /// produced `exceededContextWindowSize` on escalation.
+    func testContextWindowIsTheSmallestAcrossTiers() {
+        let tiered = TieredLLMProvider(tiers: [
+            MockLLMProvider(
+                scenes: [.text("x")],
+                capabilities: ProviderCapabilities(modelIdentifier: "roomy", usableContextTokens: 6144)
+            ),
+            MockLLMProvider(
+                scenes: [.text("y")],
+                capabilities: ProviderCapabilities(modelIdentifier: "cramped", usableContextTokens: 4096)
+            ),
+        ])
+        XCTAssertEqual(
+            tiered.capabilities.usableContextTokens,
+            4096,
+            "Escalating upward in capability can move downward in context"
+        )
+    }
+
+    /// A feature only one tier supports cannot be relied on.
+    func testFeatureFlagsAreIntersected() {
+        let tiered = TieredLLMProvider(tiers: [
+            MockLLMProvider(
+                scenes: [.text("x")],
+                capabilities: ProviderCapabilities(
+                    modelIdentifier: "visionary",
+                    supportsToolUse: true,
+                    supportsVision: true
+                )
+            ),
+            MockLLMProvider(
+                scenes: [.text("y")],
+                capabilities: ProviderCapabilities(
+                    modelIdentifier: "text-only",
+                    supportsToolUse: true,
+                    supportsVision: false
+                )
+            ),
+        ])
+        XCTAssertTrue(tiered.capabilities.supportsToolUse, "Both support tools")
+        XCTAssertFalse(tiered.capabilities.supportsVision, "Only one supports vision")
+    }
+
+    /// `nil` means "unstated", not "unlimited" — such a tier cannot
+    /// constrain a bound it never declared.
+    func testUndeclaredWindowsDoNotConstrain() {
+        let tiered = TieredLLMProvider(tiers: [
+            MockLLMProvider(
+                scenes: [.text("x")],
+                capabilities: ProviderCapabilities(modelIdentifier: "known", usableContextTokens: 4096)
+            ),
+            MockLLMProvider(
+                scenes: [.text("y")],
+                capabilities: ProviderCapabilities(modelIdentifier: "unknown")
+            ),
+        ])
         XCTAssertEqual(tiered.capabilities.usableContextTokens, 4096)
     }
 
