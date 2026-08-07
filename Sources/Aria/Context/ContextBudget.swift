@@ -84,6 +84,7 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
         budgetAvailable: Int = 0,
         toolsOffered: Int = 0,
         toolsSelected: Int = 0,
+        selectedToolNames: [String] = [],
         messagesDropped: Int = 0,
         memoriesDropped: Int = 0
     ) {
@@ -94,6 +95,7 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
         self.budgetAvailable = budgetAvailable
         self.toolsOffered = toolsOffered
         self.toolsSelected = toolsSelected
+        self.selectedToolNames = selectedToolNames
         self.messagesDropped = messagesDropped
         self.memoriesDropped = memoriesDropped
     }
@@ -113,6 +115,14 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
 
     /// Tools that survived selection and were sent.
     public let toolsSelected: Int
+
+    /// Names of the tools that survived, in the order they were sent.
+    ///
+    /// Counts alone say a surface was trimmed; names say *what to*.
+    /// The question a developer actually has when a model fails to act
+    /// is "was the tool I expected even offered?", and only the list
+    /// answers it.
+    public let selectedToolNames: [String]
 
     /// History messages dropped to fit.
     public let messagesDropped: Int

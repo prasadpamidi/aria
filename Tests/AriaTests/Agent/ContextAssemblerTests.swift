@@ -300,6 +300,11 @@ final class ContextAllocationReportingTests: XCTestCase {
         XCTAssertEqual(reported?.toolsOffered, 1)
         XCTAssertGreaterThan(reported?.toolTokens ?? 0, 0)
         XCTAssertEqual(reported?.budgetAvailable, 3584)
+        XCTAssertEqual(
+            reported?.selectedToolNames,
+            ["get_weather"],
+            "Names, not just counts — the debugging question is which tool was offered"
+        )
     }
 
     /// The callback is optional; omitting it must not change anything.

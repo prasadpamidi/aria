@@ -135,6 +135,7 @@ public struct DefaultContextAssembler: ContextAssembler {
             budgetAvailable: budget.available,
             toolsOffered: tools.count,
             toolsSelected: selectedTools.count,
+            selectedToolNames: selectedTools.map(\.name),
             messagesDropped: history.dropped,
             memoriesDropped: 0
         )
