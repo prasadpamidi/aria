@@ -71,14 +71,24 @@ public struct DefaultContextAssembler: ContextAssembler {
     ///     `load_skill` that fetches instructions on demand is
     ///     self-defeating to rank away, because the query that needs it
     ///     rarely resembles its description.
+    ///   - onAllocation: Called with the breakdown after each assembly.
+    ///
+    ///     Without this the accounting is computed and discarded, which
+    ///     leaves the cost of a turn as invisible as it was before any
+    ///     of this existed — a consumer can enforce a budget but not
+    ///     show anyone what it spent. Delivered as a callback rather
+    ///     than an `AgentEvent` case because adding a case to a public
+    ///     enum breaks exhaustive switches in shipped consumers.
     public init(
         selector: any ToolSelector = LexicalToolSelector(),
         tokenCounter: any TokenCounter = HeuristicTokenCounter(),
-        pinnedToolNames: Set<String> = []
+        pinnedToolNames: Set<String> = [],
+        onAllocation: (@Sendable (ContextAllocation) -> Void)? = nil
     ) {
         self.selector = selector
         self.tokenCounter = tokenCounter
         self.pinnedToolNames = pinnedToolNames
+        self.onAllocation = onAllocation
     }
 
     // MARK: Public
@@ -117,20 +127,24 @@ public struct DefaultContextAssembler: ContextAssembler {
         }
         messages.append(contentsOf: history.messages)
 
+        let allocation = ContextAllocation(
+            systemPromptTokens: promptTokens,
+            toolTokens: toolTokens,
+            memoryTokens: 0,
+            historyTokens: history.tokens,
+            budgetAvailable: budget.available,
+            toolsOffered: tools.count,
+            toolsSelected: selectedTools.count,
+            selectedToolNames: selectedTools.map(\.name),
+            messagesDropped: history.dropped,
+            memoriesDropped: 0
+        )
+        self.onAllocation?(allocation)
+
         return AssembledContext(
             messages: messages,
             tools: selectedTools,
-            allocation: ContextAllocation(
-                systemPromptTokens: promptTokens,
-                toolTokens: toolTokens,
-                memoryTokens: 0,
-                historyTokens: history.tokens,
-                budgetAvailable: budget.available,
-                toolsOffered: tools.count,
-                toolsSelected: selectedTools.count,
-                messagesDropped: history.dropped,
-                memoriesDropped: 0
-            )
+            allocation: allocation
         )
     }
 
@@ -146,6 +160,7 @@ public struct DefaultContextAssembler: ContextAssembler {
     private let selector: any ToolSelector
     private let tokenCounter: any TokenCounter
     private let pinnedToolNames: Set<String>
+    private let onAllocation: (@Sendable (ContextAllocation) -> Void)?
 
     /// Compose the system prompt with guidance from surviving tools.
     private static func compose(

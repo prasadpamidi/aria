@@ -264,3 +264,76 @@ final class ContextAssemblerTests: XCTestCase {
         )
     }
 }
+
+// MARK: - ContextAllocationReportingTests
+
+/// The allocation is only useful if it escapes the assembler.
+///
+/// Computed-and-discarded accounting leaves a turn's cost as invisible
+/// as it was before any budgeting existed — a consumer could enforce a
+/// limit but never show what it spent.
+final class ContextAllocationReportingTests: XCTestCase {
+    func testAllocationIsReportedToTheCallback() async {
+        let box = AllocationBox()
+        let assembler = DefaultContextAssembler(
+            onAllocation: { allocation in box.store(allocation) }
+        )
+
+        _ = await assembler.assemble(
+            systemPrompt: "You are a concise assistant.",
+            tools: [
+                AnyTool(
+                    definition: ToolDefinition(
+                        name: "get_weather",
+                        description: "Weather for a city.",
+                        inputSchema: .object(properties: [:], required: [])
+                    ),
+                    invoke: { _, _ in .null }
+                ),
+            ],
+            state: AgentState(messages: [.user("hello there")]),
+            budget: ContextBudget(total: 4096, reservedForOutput: 512)
+        )
+
+        let reported = box.value
+        XCTAssertNotNil(reported)
+        XCTAssertEqual(reported?.toolsOffered, 1)
+        XCTAssertGreaterThan(reported?.toolTokens ?? 0, 0)
+        XCTAssertEqual(reported?.budgetAvailable, 3584)
+        XCTAssertEqual(
+            reported?.selectedToolNames,
+            ["get_weather"],
+            "Names, not just counts — the debugging question is which tool was offered"
+        )
+    }
+
+    /// The callback is optional; omitting it must not change anything.
+    func testAssemblyWorksWithoutACallback() async {
+        let assembler = DefaultContextAssembler()
+        let assembled = await assembler.assemble(
+            systemPrompt: "System.",
+            tools: [],
+            state: AgentState(messages: [.user("hi")]),
+            budget: ContextBudget(total: 1024)
+        )
+        XCTAssertGreaterThan(assembled.allocation.totalTokens, 0)
+    }
+
+    /// Minimal thread-safe sink; the callback is `@Sendable`.
+    private final class AllocationBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: ContextAllocation?
+
+        var value: ContextAllocation? {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return self.stored
+        }
+
+        func store(_ allocation: ContextAllocation) {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.stored = allocation
+        }
+    }
+}
