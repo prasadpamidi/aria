@@ -459,3 +459,65 @@ final class ToolFillTests: XCTestCase {
         )
     }
 }
+
+// MARK: - AssembledReportingTests
+
+/// Counts answer "how much"; only the text answers "what".
+///
+/// The prompt the model reads is composed inside the assembler, by
+/// folding tool guidance into the caller's prompt — so a consumer
+/// cannot reconstruct it from what it passed in. Without this, a
+/// diagnostic UI can show totals but not the single thing most often
+/// worth seeing.
+final class AssembledReportingTests: XCTestCase {
+    func testAssembledRequestIsReported() async {
+        let box = AssembledBox()
+        let assembler = DefaultContextAssembler(
+            onAssembled: { assembled in box.store(assembled) }
+        )
+
+        _ = await assembler.assemble(
+            systemPrompt: "You are concise.",
+            tools: [
+                AnyTool(
+                    definition: ToolDefinition(
+                        name: "remember_fact",
+                        description: "Store a fact.",
+                        inputSchema: .object(properties: [:], required: []),
+                        promptGuidance: "Store durable first-person facts."
+                    ),
+                    invoke: { _, _ in .null }
+                ),
+            ],
+            state: AgentState(messages: [.user("hello")]),
+            budget: ContextBudget(total: 4096)
+        )
+
+        let reported = box.value
+        XCTAssertNotNil(reported)
+        let prompt = reported?.messages.first { $0.role == .system }?.textContent ?? ""
+        XCTAssertTrue(prompt.contains("You are concise."))
+        XCTAssertTrue(
+            prompt.contains("Store durable first-person facts."),
+            "The composed guidance is exactly what a caller cannot see any other way"
+        )
+        XCTAssertEqual(reported?.tools.map(\.name), ["remember_fact"])
+    }
+
+    private final class AssembledBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: AssembledContext?
+
+        var value: AssembledContext? {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return self.stored
+        }
+
+        func store(_ assembled: AssembledContext) {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.stored = assembled
+        }
+    }
+}
