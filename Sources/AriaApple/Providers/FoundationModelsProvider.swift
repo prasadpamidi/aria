@@ -250,7 +250,17 @@
             supportsAudio: false,
             supportsStructuredOutput: true,
             supportsSystemPrompt: true,
-            maxContextTokens: nil
+            // The on-device model enforces a hard 4,096-token ceiling
+            // across prompt *and* completion, and rejects the request
+            // with `exceededContextWindowSize` rather than truncating.
+            //
+            // Reporting `nil` left callers nothing to budget against,
+            // so they fell back to an optimistic default. That
+            // produced exactly this failure in the field: a request
+            // assembled against an assumed 8,192 and refused at 4,090
+            // of 4,096.
+            maxContextTokens: 4096,
+            usableContextTokens: 4096
         )
     }
 
