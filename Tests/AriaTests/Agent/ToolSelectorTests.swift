@@ -274,3 +274,59 @@ final class LexicalToolSelectorRecallTests: XCTestCase {
         XCTAssertEqual(LexicalToolSelector.fold("converting"), "convert")
     }
 }
+
+// MARK: - LexicalToolSelectorPrecisionTests
+
+final class LexicalToolSelectorPrecisionTests: XCTestCase {
+    /// The exact field failure: "give me a quick recipe idea" selected
+    /// a groceries tool because "quick" was rare in a 20-tool corpus
+    /// and IDF therefore scored it as highly discriminative.
+    func testGenericAdjectivesDoNotDecideTheMatch() async {
+        let selector = LexicalToolSelector()
+        let tools = [
+            ToolDefinition(
+                name: "run_quick_add_to_groceries_remix",
+                description: "Quickly add items to the grocery list.",
+                inputSchema: .object(properties: [:], required: [])
+            ),
+            ToolDefinition(
+                name: "rotate_image",
+                description: "Rotate an image.",
+                inputSchema: .object(properties: [:], required: [])
+            ),
+        ]
+        let result = await selector.select(
+            from: tools,
+            query: "Give me a quick recipe idea",
+            limit: 2
+        )
+        XCTAssertTrue(
+            result.isEmpty,
+            "No tool is relevant to a recipe request; matching on \"quick\" is noise"
+        )
+    }
+
+    /// Domain terms must survive — a stopword list that grows starts
+    /// deleting meaning.
+    func testDomainTermsStillMatch() async {
+        let selector = LexicalToolSelector()
+        let tools = [
+            ToolDefinition(
+                name: "add_grocery_item",
+                description: "Add an item to the grocery list.",
+                inputSchema: .object(properties: [:], required: [])
+            ),
+            ToolDefinition(
+                name: "rotate_image",
+                description: "Rotate an image.",
+                inputSchema: .object(properties: [:], required: [])
+            ),
+        ]
+        let result = await selector.select(
+            from: tools,
+            query: "add milk to my grocery list",
+            limit: 1
+        )
+        XCTAssertEqual(result.map(\.name), ["add_grocery_item"])
+    }
+}

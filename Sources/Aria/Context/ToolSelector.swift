@@ -74,7 +74,7 @@ public struct LexicalToolSelector: ToolSelector {
         guard limit > 0, !tools.isEmpty else {
             return []
         }
-        let queryTerms = Set(Self.tokenize(query))
+        let queryTerms = Set(Self.tokenize(query)).subtracting(Self.stopWords)
         guard !queryTerms.isEmpty else {
             return []
         }
@@ -116,6 +116,31 @@ public struct LexicalToolSelector: ToolSelector {
     }
 
     // MARK: Internal
+
+    /// Terms carrying no signal about which tool is wanted.
+    ///
+    /// IDF weights by rarity *within the tool corpus*, which is not the
+    /// same as informativeness — and the two come apart exactly here.
+    /// Across twenty tools the word "quick" appears about once, so IDF
+    /// scores it as highly discriminative and "give me a quick recipe
+    /// idea" selects `run_quick_add_to_groceries_remix`. The adjective
+    /// decided the match; "recipe", the word that mattered, matched
+    /// nothing.
+    ///
+    /// A corpus-statistical measure cannot notice this on its own,
+    /// because in a small corpus a junk term genuinely is rare. The
+    /// list is short on purpose: generic verbs and adjectives that
+    /// appear in requests regardless of intent. Anything domain-shaped
+    /// stays in, since a stopword list that grows starts deleting
+    /// meaning.
+    static let stopWords: Set<String> = [
+        "give", "get", "make", "show", "tell", "find", "help", "want",
+        "need", "like", "know", "think", "look", "try", "use", "have",
+        "quick", "fast", "easy", "simple", "good", "nice", "new", "best",
+        "some", "any", "thing", "idea", "please", "can", "could", "would",
+        "about", "with", "for", "the", "and", "you", "your", "what",
+        "how", "why", "when", "where", "who", "this", "that",
+    ]
 
     /// Lowercased alphanumeric terms, split on punctuation *and*
     /// camelCase boundaries.

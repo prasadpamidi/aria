@@ -210,11 +210,24 @@ public struct DefaultContextAssembler: ContextAssembler {
         state: AgentState,
         budget: ContextBudget
     ) async -> [AnyTool] {
-        guard let maxTools = budget.maxTools else {
-            return tools
-        }
         guard !tools.isEmpty else {
             return []
+        }
+
+        let maxTools = budget.maxTools ?? Int.max
+        let ceiling = budget.toolTokenLimit
+
+        // Nothing to relieve: everything fits under both limits, so
+        // ranking could only remove tools the model might need.
+        //
+        // The share ceiling applies whether or not a count cap is set.
+        // Gating it on `maxTools` meant an uncapped budget sent every
+        // tool no matter how large the surface grew — the exact
+        // pressure this mechanism exists to relieve, and precisely
+        // where it was absent.
+        let totalCost = tools.reduce(0) { $0 + self.tokenCounter.count(tool: $1.definition) }
+        if tools.count <= maxTools, totalCost <= ceiling {
+            return tools
         }
 
         let required = self.pinnedToolNames
@@ -226,7 +239,7 @@ public struct DefaultContextAssembler: ContextAssembler {
         // beats the budget here: dropping a tool the run already called
         // breaks the conversation outright, while overshooting the cap
         // only costs tokens.
-        let room = max(0, maxTools - requiredTools.count)
+        let room = maxTools == Int.max ? candidates.count : max(0, maxTools - requiredTools.count)
         guard room > 0, !candidates.isEmpty else {
             return requiredTools
         }
@@ -236,11 +249,38 @@ public struct DefaultContextAssembler: ContextAssembler {
             query: Self.latestUserText(in: state.messages),
             limit: room
         )
-        let rankedNames = ranked.map(\.name)
         let byName = Dictionary(candidates.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
-        let selected = rankedNames.compactMap { byName[$0] }
+        var selected = requiredTools + ranked.compactMap { byName[$0.name] }
 
-        return requiredTools + selected
+        // Rank, then fill.
+        //
+        // Ranking decides order; the budget decides how many. Sending
+        // only what matched lexically discards tools that would have
+        // cost nothing to include — observed in practice as a
+        // twenty-tool surface reduced to a single match on the word
+        // "quick", with 97% of the window left empty and the tool the
+        // user actually needed among the discarded.
+        //
+        // A miss in ranking is then merely an ordering mistake rather
+        // than an amputation, which matters because lexical matching
+        // misses often.
+        var chosen = Set(selected.map(\.name))
+        var spent = selected.reduce(0) { $0 + self.tokenCounter.count(tool: $1.definition) }
+
+        for tool in candidates where !chosen.contains(tool.name) {
+            guard selected.count < maxTools else {
+                break
+            }
+            let cost = self.tokenCounter.count(tool: tool.definition)
+            guard spent + cost <= ceiling else {
+                continue
+            }
+            selected.append(tool)
+            chosen.insert(tool.name)
+            spent += cost
+        }
+
+        return selected
     }
 
     /// Trim oldest history until it fits, preserving system messages.
