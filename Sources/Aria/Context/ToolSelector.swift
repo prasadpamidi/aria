@@ -140,6 +140,15 @@ public struct LexicalToolSelector: ToolSelector {
         "some", "any", "thing", "idea", "please", "can", "could", "would",
         "about", "with", "for", "the", "and", "you", "your", "what",
         "how", "why", "when", "where", "who", "this", "that",
+        // Words that frame *when* something holds rather than *what* is
+        // being asked about. "What's my current weight?" scored
+        // `current_time` and `get_weather` on "current", sent nothing
+        // about weight, and left the model with no tool that could
+        // answer — the "quick" failure again with a different
+        // adjective. Recency words attach to any request regardless of
+        // its subject, which is exactly the property that makes them
+        // worthless for telling tools apart.
+        "current", "currently", "now", "today", "latest", "recent",
     ]
 
     /// Lowercased alphanumeric terms, split on punctuation *and*

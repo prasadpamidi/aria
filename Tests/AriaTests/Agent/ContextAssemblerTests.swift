@@ -583,3 +583,111 @@ final class AssembledReportingTests: XCTestCase {
         }
     }
 }
+
+// MARK: - ToolResultBoundingTests
+
+/// Windowing drops whole messages oldest-first and never drops the
+/// newest, so it is no defence at all against a tool that returns
+/// something enormous.
+///
+/// The field failure: `simplemcp__get_weather` failed to reach its
+/// server, the model responded by calling `load_skill` three times for
+/// unrelated skills, each returning a full Markdown body, and the turn
+/// died inside FoundationModels with a token-generation error — past
+/// the point any budget could see it. Trimming the conversation to
+/// nothing would not have helped, because the oversized results *were*
+/// the newest messages.
+final class ToolResultBoundingTests: XCTestCase {
+    /// The crash mechanism, reproduced: results that alone exceed the
+    /// window must still assemble to something that fits.
+    func testThreeHugeResultsStillFitTheWindow() async {
+        let assembler = DefaultContextAssembler()
+        let body = String(repeating: "skill guidance text ", count: 800)
+        let state = AgentState(messages: [
+            .user("What's my current weight?"),
+            .tool(callId: "a", text: body),
+            .tool(callId: "b", text: body),
+            .tool(callId: "c", text: body),
+        ])
+
+        let assembled = await assembler.assemble(
+            systemPrompt: "You are helpful.",
+            tools: [],
+            state: state,
+            budget: ContextBudget(total: 4096, reservedForOutput: 768)
+        )
+
+        XCTAssertLessThanOrEqual(
+            assembled.allocation.totalTokens,
+            assembled.allocation.budgetAvailable,
+            "A request that exceeds the window is refused by the provider, not truncated"
+        )
+        XCTAssertEqual(assembled.allocation.toolResultsTruncated, 3)
+    }
+
+    /// Truncation is marked. A model handed a fragment it believes is
+    /// whole will answer confidently from half a document.
+    func testTruncationIsVisibleToTheModel() async {
+        let assembler = DefaultContextAssembler()
+        let state = AgentState(messages: [
+            .user("go"),
+            .tool(callId: "a", text: String(repeating: "content ", count: 2000)),
+        ])
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: [],
+            state: state,
+            budget: ContextBudget(total: 4096, reservedForOutput: 768)
+        )
+
+        let toolText = assembled.messages.first { $0.role == .tool }?.textContent ?? ""
+        XCTAssertTrue(toolText.contains("truncated"), "The cut must be legible to the model")
+        XCTAssertTrue(assembled.allocation.didTruncate)
+    }
+
+    /// A result that already fits is passed through untouched — the cap
+    /// is a ceiling, not a target.
+    func testSmallResultsAreLeftAlone() async {
+        let assembler = DefaultContextAssembler()
+        let state = AgentState(messages: [
+            .user("go"),
+            .tool(callId: "a", text: "{\"ok\": true}"),
+        ])
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: [],
+            state: state,
+            budget: ContextBudget(total: 4096, reservedForOutput: 768)
+        )
+
+        XCTAssertEqual(assembled.allocation.toolResultsTruncated, 0)
+        XCTAssertEqual(
+            assembled.messages.first { $0.role == .tool }?.textContent,
+            "{\"ok\": true}"
+        )
+    }
+
+    /// The tool-call id has to survive truncation, or the result stops
+    /// resolving against the call that produced it.
+    func testTruncationPreservesTheToolCallId() async {
+        let assembler = DefaultContextAssembler()
+        let state = AgentState(messages: [
+            .user("go"),
+            .tool(callId: "call-42", text: String(repeating: "x ", count: 4000)),
+        ])
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: [],
+            state: state,
+            budget: ContextBudget(total: 4096, reservedForOutput: 768)
+        )
+
+        XCTAssertEqual(
+            assembled.messages.first { $0.role == .tool }?.toolCallId,
+            "call-42"
+        )
+    }
+}

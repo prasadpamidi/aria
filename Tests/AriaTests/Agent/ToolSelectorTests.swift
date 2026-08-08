@@ -330,3 +330,57 @@ final class LexicalToolSelectorPrecisionTests: XCTestCase {
         XCTAssertEqual(result.map(\.name), ["add_grocery_item"])
     }
 }
+
+// MARK: - RecencyWordTests
+
+/// Words that frame *when* something holds attach to any request
+/// regardless of its subject, which is what makes them worthless for
+/// telling tools apart — and dangerous, because IDF cannot notice.
+final class RecencyWordTests: XCTestCase {
+    /// The field failure: "What's my current weight?" ranked
+    /// `current_time` and `get_weather` on the word "current" and
+    /// offered nothing about weight, leaving the model with no tool
+    /// that could answer.
+    func testCurrentDoesNotDecideTheMatch() async {
+        let selector = LexicalToolSelector()
+        let tools = [
+            Self.tool("current_time", "Get the current date and time."),
+            Self.tool("get_weather", "Get the current weather for a city."),
+            Self.tool("get_weight_trend", "The user's weight trend over time."),
+        ]
+
+        let selected = await selector.select(
+            from: tools,
+            query: "What's my current weight?",
+            limit: 3
+        )
+
+        XCTAssertEqual(selected.first?.name, "get_weight_trend", "The subject decides, not the adjective")
+    }
+
+    /// The words still do their job when they *are* the subject: "what
+    /// time is it now" must still reach a clock.
+    func testRemovingRecencyWordsDoesNotBreakTimeQueries() async {
+        let selector = LexicalToolSelector()
+        let tools = [
+            Self.tool("current_time", "Get the current date and time."),
+            Self.tool("get_weight_trend", "The user's weight trend over time."),
+        ]
+
+        let selected = await selector.select(
+            from: tools,
+            query: "what is the current time now",
+            limit: 1
+        )
+
+        XCTAssertEqual(selected.first?.name, "current_time")
+    }
+
+    private static func tool(_ name: String, _ description: String) -> ToolDefinition {
+        ToolDefinition(
+            name: name,
+            description: description,
+            inputSchema: .object(properties: [:], required: [])
+        )
+    }
+}

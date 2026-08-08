@@ -46,16 +46,34 @@ public struct ContextBudget: Sendable, Equatable {
     ///     discarded cost nothing to include and might have been the
     ///     ones needed. Filtering should be driven by pressure on the
     ///     budget, not applied unconditionally.
+    ///   - maxToolResultShare: Ceiling on the fraction of `available`
+    ///     that any *single* tool result may occupy.
+    ///
+    ///     Windowing drops whole messages oldest-first, which is the
+    ///     right shape for conversation and no defence at all against a
+    ///     tool that returns something enormous. The newest messages are
+    ///     never dropped — the model must have something to respond
+    ///     to — so three large results in a row cannot be trimmed by
+    ///     dropping anything, and the request goes out over budget.
+    ///
+    ///     Observed: a `load_skill` tool returning full Markdown bodies
+    ///     was called three times after an unrelated tool failed, and
+    ///     the turn died inside the provider with a token-generation
+    ///     error rather than anywhere the budget could see. Capping each
+    ///     result makes the overflow structurally impossible instead of
+    ///     merely unlikely.
     public init(
         total: Int,
         reservedForOutput: Int = 512,
         maxTools: Int? = nil,
-        maxToolShare: Double = 0.4
+        maxToolShare: Double = 0.4,
+        maxToolResultShare: Double = 0.25
     ) {
         self.total = max(0, total)
         self.reservedForOutput = max(0, min(reservedForOutput, self.total))
         self.maxTools = maxTools.map { max(0, $0) }
         self.maxToolShare = min(max(0, maxToolShare), 1)
+        self.maxToolResultShare = min(max(0, maxToolResultShare), 1)
     }
 
     // MARK: Public
@@ -72,9 +90,20 @@ public struct ContextBudget: Sendable, Equatable {
     /// Fraction of `available` that tool definitions may occupy.
     public let maxToolShare: Double
 
+    /// Fraction of `available` any single tool result may occupy.
+    public let maxToolResultShare: Double
+
     /// Token ceiling for tool definitions.
     public var toolTokenLimit: Int {
         Int(Double(self.available) * self.maxToolShare)
+    }
+
+    /// Token ceiling for one tool result. Results above this are
+    /// truncated with a marker rather than dropped: the model needs to
+    /// know it is reading a fragment, and the beginning of a result is
+    /// usually the part that matters.
+    public var toolResultTokenLimit: Int {
+        Int(Double(self.available) * self.maxToolResultShare)
     }
 
     /// Tokens the assembler may spend on input.
@@ -105,7 +134,8 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
         toolsSelected: Int = 0,
         selectedToolNames: [String] = [],
         messagesDropped: Int = 0,
-        memoriesDropped: Int = 0
+        memoriesDropped: Int = 0,
+        toolResultsTruncated: Int = 0
     ) {
         self.systemPromptTokens = systemPromptTokens
         self.toolTokens = toolTokens
@@ -117,6 +147,7 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
         self.selectedToolNames = selectedToolNames
         self.messagesDropped = messagesDropped
         self.memoriesDropped = memoriesDropped
+        self.toolResultsTruncated = toolResultsTruncated
     }
 
     // MARK: Public
@@ -149,6 +180,15 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
     /// Recalled memories dropped to fit.
     public let memoriesDropped: Int
 
+    /// Tool results cut down to fit their per-result ceiling.
+    ///
+    /// Distinct from `messagesDropped`: a dropped message is gone, a
+    /// truncated one is still there and incomplete. A model reasoning
+    /// from a fragment fails in a different and more confusing way than
+    /// one reasoning from less history, so the two are worth telling
+    /// apart in a trace.
+    public let toolResultsTruncated: Int
+
     /// Total input tokens the assembler believes it produced.
     public var totalTokens: Int {
         self.systemPromptTokens + self.toolTokens + self.memoryTokens + self.historyTokens
@@ -157,6 +197,9 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
     /// `true` when the assembler could not fit everything it was asked
     /// to fit. Useful as a one-line health signal in diagnostics.
     public var didTruncate: Bool {
-        self.messagesDropped > 0 || self.memoriesDropped > 0 || self.toolsSelected < self.toolsOffered
+        self.messagesDropped > 0
+            || self.memoriesDropped > 0
+            || self.toolResultsTruncated > 0
+            || self.toolsSelected < self.toolsOffered
     }
 }
