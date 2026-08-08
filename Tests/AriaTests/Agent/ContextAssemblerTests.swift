@@ -340,12 +340,20 @@ final class ContextAllocationReportingTests: XCTestCase {
 
 // MARK: - ToolFillTests
 
-/// Ranking decides order; the budget decides how many.
+/// Filling is a fallback for ranking failure, not a supplement to
+/// ranking success.
 ///
-/// Observed in the field: a twenty-tool surface reduced to a single
-/// lexical match on the word "quick", with 97% of the window left
-/// empty and the tool the user needed among the discarded. Sending
-/// only what matched throws away tools that cost nothing to include.
+/// Two field failures bound this from opposite sides. Sending only
+/// lexical matches reduced a twenty-tool surface to a single match on
+/// the word "quick", discarding the tool the user needed. Filling
+/// unconditionally then sent eight zero-scoring tools alongside a
+/// correct match for "Check my fasting status", and the model opened
+/// the turn by calling `remember_fact` on a question.
+///
+/// So the signal that decides is whether ranking produced anything at
+/// all: no matches means no information, and everything that fits
+/// should ship; matches mean the ranking worked and padding it with
+/// tools that scored zero only invites them to be called.
 final class ToolFillTests: XCTestCase {
     func testUnmatchedToolsFillRemainingBudget() async {
         let assembler = DefaultContextAssembler()
@@ -396,9 +404,9 @@ final class ToolFillTests: XCTestCase {
         XCTAssertEqual(assembled.tools.map(\.name).first, "rotate_image")
     }
 
-    /// Once a limit actually binds, relevance leads and the remainder
-    /// fills in behind it.
-    func testRankedToolsLeadOnceFilteringEngages() async {
+    /// Once a limit actually binds, relevance leads — and nothing
+    /// irrelevant rides along behind it.
+    func testRankedToolsShipWithoutIrrelevantPadding() async {
         let assembler = DefaultContextAssembler()
         var tools = [
             Self.tool(named: "rotate_image", description: "Rotate an image."),
@@ -418,7 +426,61 @@ final class ToolFillTests: XCTestCase {
         )
 
         XCTAssertEqual(assembled.tools.first?.name, "log_meal", "Relevance leads")
-        XCTAssertEqual(assembled.tools.count, 5, "And the budget is still filled")
+        XCTAssertFalse(
+            assembled.tools.contains { $0.name.hasPrefix("filler_") },
+            "Spare budget is not a reason to offer tools that scored zero"
+        )
+    }
+
+    /// The field case, reproduced.
+    ///
+    /// "Check my fasting status" ranks the fasting tool. It must not
+    /// also ship `remember_fact` — the model called it, on a question,
+    /// and spent six seconds of an eleven-second time-to-first-token
+    /// having the proposal correctly rejected.
+    func testACorrectMatchDoesNotDragInUnrelatedTools() async {
+        let assembler = DefaultContextAssembler()
+        var tools = [
+            Self.tool(
+                named: "niora__get_fasting_status",
+                description: "Whether the user is fasting now, and progress toward their target."
+            ),
+            Self.tool(named: "remember_fact", description: "Save a durable fact about the user."),
+            Self.tool(named: "http_request", description: "Perform an HTTP request to a URL."),
+        ]
+        tools.append(contentsOf: (0..<20).map {
+            Self.tool(named: "other_\($0)", description: "Unrelated capability \($0).")
+        })
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: tools,
+            state: AgentState(messages: [.user("Check my fasting status")]),
+            budget: ContextBudget(total: 4096, maxTools: 12)
+        )
+
+        let names = assembled.tools.map(\.name)
+        XCTAssertTrue(names.contains("niora__get_fasting_status"), "The relevant tool must ship")
+        XCTAssertFalse(names.contains("remember_fact"), "A question is not a fact to save")
+        XCTAssertFalse(names.contains("http_request"))
+    }
+
+    /// The fallback still holds: a query nothing matches must not
+    /// collapse the surface to whatever happens to be pinned.
+    func testUnrankedQueryStillFillsTheBudget() async {
+        let assembler = DefaultContextAssembler()
+        let tools = (0..<20).map {
+            Self.tool(named: "tool_\($0)", description: "Does specific job number \($0).")
+        }
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: tools,
+            state: AgentState(messages: [.user("zzzz")]),
+            budget: ContextBudget(total: 8192, maxTools: 12)
+        )
+
+        XCTAssertEqual(assembled.tools.count, 12)
     }
 
     /// Filling stops at the share ceiling — the pressure the whole

@@ -267,18 +267,36 @@ public struct DefaultContextAssembler: ContextAssembler {
         let byName = Dictionary(candidates.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
         var selected = requiredTools + ranked.compactMap { byName[$0.name] }
 
-        // Rank, then fill.
+        // Fill only when ranking had nothing to say.
         //
-        // Ranking decides order; the budget decides how many. Sending
-        // only what matched lexically discards tools that would have
-        // cost nothing to include — observed in practice as a
-        // twenty-tool surface reduced to a single match on the word
-        // "quick", with 97% of the window left empty and the tool the
-        // user actually needed among the discarded.
+        // The selector returns matches above a score floor, so every
+        // tool a fill adds scored *zero* against the query — it is
+        // included on the strength of nothing at all. That is the right
+        // hedge when ranking failed outright, and the wrong one when it
+        // succeeded.
         //
-        // A miss in ranking is then merely an ordering mistake rather
-        // than an amputation, which matters because lexical matching
-        // misses often.
+        // This used to fill unconditionally, on the reasoning that a
+        // tool costing nothing in spare budget could only help. The
+        // field disproved it: "Check my fasting status" ranked the
+        // fasting tool correctly, then filled eight more to the cap in
+        // arbitrary array order, and the model opened the turn by
+        // calling `remember_fact` on a question — six seconds of an
+        // eleven-second time-to-first-token spent on a tool no
+        // reasonable ranking would have offered.
+        //
+        // So spare budget is not free. Unrelated tools cost accuracy
+        // and latency on a small model whether or not their tokens fit,
+        // and a half-empty context window is only a problem if the tool
+        // the user needed is the part that's missing.
+        guard selected.count == requiredTools.count else {
+            return selected
+        }
+
+        // Nothing scored: the query shares no distinctive term with any
+        // description, which is a routine outcome for lexical matching
+        // ("what did I eat?" misses `log_meal`) and says nothing about
+        // relevance. Send what fits rather than amputating the surface
+        // to whatever was pinned.
         var chosen = Set(selected.map(\.name))
         var spent = selected.reduce(0) { $0 + self.tokenCounter.count(tool: $1.definition) }
 
