@@ -40,7 +40,7 @@
                 NLEmbeddingEmbedder(),
                 "No sentence embedding for English on this OS"
             )
-            let eval = ToolSelectionEval(corpus: Self.corpus, cases: Self.cases)
+            let eval = ToolSelectionEval(corpus: ToolSelectionFixtures.corpus, cases: ToolSelectionFixtures.cases)
 
             let lexical = await eval.run(LexicalToolSelector(), label: "lexical")
             let noStopWords = await eval.run(
@@ -67,6 +67,51 @@
             XCTAssertGreaterThan(lexical.hitRate, 0.5, "The shipped default must clear a floor")
         }
 
+        /// Apple's contextual (BERT) embedding against everything else.
+        ///
+        /// `NLEmbedding` averages static word vectors; this reads the
+        /// whole string. The question is whether that closes the four
+        /// paraphrase cases every ranker currently misses — "what did I
+        /// eat today?", "what did I lift last week?" — without giving
+        /// up the precision lexical has on identifier matches.
+        ///
+        /// Assets download on demand, so this skips rather than fails
+        /// when they are unavailable: a network-dependent assertion in
+        /// a unit suite is a flake, not a signal.
+        func testContextualEmbeddingRanker() async throws {
+            guard #available(iOS 17.0, macOS 14.0, *),
+                  let embedder = NLContextualEmbedder() else {
+                throw XCTSkip("NLContextualEmbedding unavailable")
+            }
+            do {
+                try await embedder.prepare()
+            } catch {
+                throw XCTSkip("NLContextualEmbedding assets unavailable: \(error)")
+            }
+
+            let eval = ToolSelectionEval(corpus: ToolSelectionFixtures.corpus, cases: ToolSelectionFixtures.cases)
+            let contextual = await eval.run(
+                EmbeddingToolSelector(embedder: embedder, fallback: nil),
+                label: "nl-contextual"
+            )
+            let fused = await eval.run(
+                FusedToolSelector(selectors: [
+                    LexicalToolSelector(),
+                    EmbeddingToolSelector(embedder: embedder, fallback: nil),
+                ]),
+                label: "fused(lexical + nl-contextual)"
+            )
+
+            print("\n" + contextual.summary())
+            print("\n" + fused.summary() + "\n")
+
+            XCTAssertGreaterThan(
+                contextual.hitRate,
+                0,
+                "A loaded contextual model must rank something"
+            )
+        }
+
         /// Does the stopword list earn its maintenance?
         ///
         /// It was grown twice on intuition, and intuition is what this
@@ -76,8 +121,8 @@
         /// first for a recipe question and a clock first for a weight
         /// question — the two original field failures, reproduced.
         func testStopWordsPreventGenericTermsFromDecidingTheMatch() async throws {
-            let junkTermCases = Self.cases.filter { !$0.misleading.isEmpty }
-            let eval = ToolSelectionEval(corpus: Self.corpus, cases: junkTermCases)
+            let junkTermCases = ToolSelectionFixtures.cases.filter { !$0.misleading.isEmpty }
+            let eval = ToolSelectionEval(corpus: ToolSelectionFixtures.corpus, cases: junkTermCases)
 
             let with = await eval.run(LexicalToolSelector(), label: "with stopwords")
             let without = await eval.run(
@@ -112,7 +157,7 @@
             )
 
             let selected = await selector.select(
-                from: Self.corpus,
+                from: ToolSelectionFixtures.corpus,
                 query: "zzzz qqqq",
                 limit: 5
             )
@@ -130,7 +175,7 @@
             )
 
             let selected = await selector.select(
-                from: Self.corpus,
+                from: ToolSelectionFixtures.corpus,
                 query: "log my meal",
                 limit: 3
             )
@@ -145,133 +190,13 @@
                 LexicalToolSelector(),
             ])
             let selected = await fused.select(
-                from: Self.corpus,
+                from: ToolSelectionFixtures.corpus,
                 query: "zzzz qqqq",
                 limit: 5
             )
             XCTAssertTrue(selected.isEmpty)
         }
 
-        // MARK: - Fixtures
-
-        /// A device's actual surface: Niora, a second MCP server, and
-        /// the built-ins.
-        static let corpus: [ToolDefinition] = [
-            ToolSelectionEvalTests.tool("niora__get_fasting_status", "Whether the user is fasting now, and progress toward their target if so."),
-            ToolSelectionEvalTests.tool("niora__start_fast", "Start a fast for the user."),
-            ToolSelectionEvalTests.tool("niora__end_fast", "End the user's current fast."),
-            ToolSelectionEvalTests.tool("niora__get_fasting_stats", "Fasting history and streaks over recent weeks."),
-            ToolSelectionEvalTests.tool("niora__get_weight_trend", "The user's weight trend over time, with the latest recorded value."),
-            ToolSelectionEvalTests.tool("niora__log_weight", "Record a weight measurement for the user in kilograms."),
-            ToolSelectionEvalTests.tool("niora__log_meal", "Record a meal the user ate, with its nutrition."),
-            ToolSelectionEvalTests.tool("niora__list_meals", "Meals the user has eaten on a given day."),
-            ToolSelectionEvalTests.tool("niora__get_daily_nutrition", "Calories and macros consumed against the user's goals."),
-            ToolSelectionEvalTests.tool("niora__search_recipes", "Search the recipe library by ingredient, cuisine or meal type."),
-            ToolSelectionEvalTests.tool("niora__get_recipe", "Full ingredients and steps for one saved recipe."),
-            ToolSelectionEvalTests.tool("niora__save_recipe", "Save a recipe to the user's library."),
-            ToolSelectionEvalTests.tool("niora__get_shopping_list", "The shopping list for a week, generated from the meal plan."),
-            ToolSelectionEvalTests.tool("niora__add_shopping_item", "Add an item to the user's shopping list."),
-            ToolSelectionEvalTests.tool("niora__get_readiness", "Daily readiness score with the sleep, HRV and soreness signals behind it."),
-            ToolSelectionEvalTests.tool("niora__get_workout", "Details of one workout, including its exercises and sets."),
-            ToolSelectionEvalTests.tool("niora__list_workouts", "Workouts the user has completed, most recent first."),
-            ToolSelectionEvalTests.tool("niora__generate_workout", "Build a new workout for the user from their program and equipment."),
-            ToolSelectionEvalTests.tool("niora__log_water", "Log a water intake entry in millilitres."),
-            ToolSelectionEvalTests.tool("niora__get_hydration_today", "How much water the user has drunk against their target."),
-            ToolSelectionEvalTests.tool("niora__get_profile", "The user's profile: display name, units, goals, dietary preferences."),
-            ToolSelectionEvalTests.tool("niora__get_daily_briefing", "The user's full context for today in one call."),
-            ToolSelectionEvalTests.tool("simplemcp__get_weather", "Get the current weather for a city."),
-            ToolSelectionEvalTests.tool("simplemcp__get_forecast", "Get the multi-day weather forecast for a city."),
-            ToolSelectionEvalTests.tool("current_time", "Get the current date and time in the user's timezone."),
-            ToolSelectionEvalTests.tool("http_request", "Perform an HTTP request to a URL and return the response body."),
-            ToolSelectionEvalTests.tool("remember_fact", "Save a durable, first-person fact about the user that should persist."),
-            ToolSelectionEvalTests.tool("load_skill", "Load a named skill's instructions on demand."),
-            ToolSelectionEvalTests.tool("run_quick_add_to_groceries_remix", "Quickly add an item to the groceries list."),
-            ToolSelectionEvalTests.tool("open_url", "Open a URL in the browser."),
-        ]
-
-        static let cases: [ToolSelectionCase] = [
-            // FIELD — ranked current_time and get_weather on "current",
-            // offered nothing about weight, and the model flailed into
-            // three unrelated skill loads before the turn died.
-            ToolSelectionCase(
-                query: "What's my current weight?",
-                expected: ["niora__get_weight_trend"],
-                misleading: ["current_time", "simplemcp__get_weather"],
-                note: "FIELD 2026-08-07: recency adjective decided the match"
-            ),
-            // FIELD — a twenty-tool surface reduced to one match on the
-            // word "quick".
-            ToolSelectionCase(
-                query: "give me a quick recipe idea",
-                expected: ["niora__search_recipes", "niora__get_recipe"],
-                misleading: ["run_quick_add_to_groceries_remix"],
-                note: "FIELD: generic adjective decided the match"
-            ),
-            // FIELD — worked, and must keep working.
-            ToolSelectionCase(
-                query: "Check my fasting status",
-                expected: ["niora__get_fasting_status"],
-                misleading: ["remember_fact"],
-                note: "FIELD: regression guard"
-            ),
-            // The gap no stopword list can close: no shared term with
-            // "Record a meal the user ate".
-            ToolSelectionCase(
-                query: "what did I eat today?",
-                expected: ["niora__list_meals", "niora__get_daily_nutrition"],
-                note: "Vocabulary mismatch — lexical ranking cannot connect these"
-            ),
-            ToolSelectionCase(
-                query: "how much water have I had?",
-                expected: ["niora__get_hydration_today"],
-                note: "Paraphrase of the description"
-            ),
-            ToolSelectionCase(
-                query: "am I recovered enough to train hard today?",
-                expected: ["niora__get_readiness"],
-                misleading: ["current_time"],
-                note: "Intent stated without any of the description's terms"
-            ),
-            ToolSelectionCase(
-                query: "what is the current time now",
-                expected: ["current_time"],
-                note: "Recency words as the subject must still reach a clock"
-            ),
-            ToolSelectionCase(
-                query: "what's the weather like in Tokyo",
-                expected: ["simplemcp__get_weather"],
-                note: "Unambiguous — a floor case"
-            ),
-            ToolSelectionCase(
-                query: "I weighed 82 kg this morning",
-                expected: ["niora__log_weight"],
-                misleading: ["niora__get_weight_trend"],
-                note: "Writing vs reading the same subject"
-            ),
-            ToolSelectionCase(
-                query: "add oat milk to my shopping list",
-                expected: ["niora__add_shopping_item"],
-                note: "Unambiguous — a floor case"
-            ),
-            ToolSelectionCase(
-                query: "remember that I'm vegetarian",
-                expected: ["remember_fact"],
-                note: "Regression guard for the memory path"
-            ),
-            ToolSelectionCase(
-                query: "what did I lift last week?",
-                expected: ["niora__list_workouts"],
-                note: "Domain synonym: lift/workout"
-            ),
-        ]
-
-        private static func tool(_ name: String, _ description: String) -> ToolDefinition {
-            ToolDefinition(
-                name: name,
-                description: description,
-                inputSchema: .object(properties: [:], required: [])
-            )
-        }
     }
 
 #endif

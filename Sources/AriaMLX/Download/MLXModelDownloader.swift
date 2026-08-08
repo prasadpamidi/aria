@@ -1,6 +1,7 @@
 #if ARIA_MLX
     import Foundation
     import HuggingFace
+    import MLXEmbedders
     import MLXLLM
     import MLXLMCommon
     import MLXLMHuggingFace
@@ -75,6 +76,33 @@
         /// `HubClient` configured with `defaultCacheDirectory()`.
         public static func defaultHubClient() -> HubClient {
             HubClient(cache: HubCache(cacheDirectory: self.defaultCacheDirectory()))
+        }
+
+        /// Download (or verify already-cached) an *embedding* model and
+        /// return its loaded container.
+        ///
+        /// A separate entry point because embedders resolve through
+        /// their own factory and registry: the model types (BERT, Nomic
+        /// BERT, Qwen3, Gemma3, LFM2 bidirectional) do not overlap with
+        /// the chat registry, and `ToolCallFormat` means nothing for
+        /// them. Everything else is shared — same Hub client, same
+        /// on-disk cache, same progress ticks — so an embedding model
+        /// downloads and reports exactly like a chat model.
+        public func loadEmbedderContainer(
+            id: String,
+            revision: String = "main",
+            useLatest: Bool = false,
+            onProgress: @Sendable @escaping (MLXDownloadProgress) -> Void = { _ in }
+        ) async throws -> EmbedderModelContainer {
+            try await EmbedderModelFactory.shared.loadContainer(
+                from: self.hubClient,
+                using: TransformersLoader(),
+                configuration: ModelConfiguration(id: id, revision: revision),
+                useLatest: useLatest,
+                progressHandler: { progress in
+                    onProgress(MLXDownloadProgress(progress: progress))
+                }
+            )
         }
 
         /// Download (or verify already-cached) a model and return its
