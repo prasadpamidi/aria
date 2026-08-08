@@ -12,18 +12,45 @@
     /// Downloads weights on first run, so it skips rather than fails
     /// when the network or the Hub is unavailable — a network-dependent
     /// assertion in a unit suite is a flake, not a signal. Run it
-    /// deliberately when choosing a model:
+    /// deliberately when choosing a model. The SwiftPM CLI cannot run
+    /// it — mlx-swift's Metal kernels only build under Xcode's build
+    /// system, and `swift build` emits no metallib at all, so every
+    /// call fails inside MLX before reaching a test. Use xcodebuild,
+    /// and note that `MLX` is not a default trait:
     ///
-    ///     swift test --traits MLX --filter MLXEmbedderEvalTests
+    ///     xcodebuild test -scheme Aria-Package \
+    ///       -destination 'platform=macOS,arch=arm64' \
+    ///       -only-testing:AriaMLXTests/MLXEmbedderEvalTests \
+    ///       -skipPackagePluginValidation -skipMacroValidation
     final class MLXEmbedderEvalTests: XCTestCase {
         /// The comparison that decides which encoder ships.
         ///
-        /// Standings before this: lexical 67% hit / 0.61 MRR, Apple's
-        /// `NLContextualEmbedding` 83% / 0.54, and fusing those two
-        /// 92% / 0.72. A retrieval-trained encoder should beat the
-        /// contextual model outright; the question worth answering is
-        /// whether it beats the *fusion*, because that is what it would
-        /// have to replace to justify a model download.
+        /// Measured on the field corpus (macOS, Xcode test run — the
+        /// SwiftPM CLI cannot build mlx-swift's Metal kernels):
+        ///
+        ///     ranker                         hit  top-1   MRR  misled
+        ///     lexical                        67%    58%  0.61      0%
+        ///     NLEmbedding                    58%    25%  0.39      8%
+        ///     NLContextualEmbedding          83%    25%  0.54      0%
+        ///     fused(lexical + contextual)    92%    58%  0.72      0%
+        ///     mlx/bge-small                 100%    58%  0.76      8%
+        ///     fused(lexical + bge-small)    100%    67%  0.79      0%
+        ///
+        /// A 33M-parameter retrieval encoder answers every case,
+        /// including "what did I lift last week?", which nothing else
+        /// tried could reach — lift/workout is a domain synonym only a
+        /// trained retriever carries.
+        ///
+        /// It is still misled alone, and by the same query that started
+        /// all of this: "give me a quick recipe idea" ranks
+        /// `run_quick_add_to_groceries_remix` first. Semantic
+        /// similarity falls for the junk adjective too — it is simply a
+        /// different mechanism for the same mistake. Fusing with
+        /// lexical, whose stopword list rejects "quick", removes it.
+        ///
+        /// So the two rankers are complements rather than rivals, which
+        /// is the one conclusion that has survived every measurement
+        /// here.
         func testBGESmallOnTheFieldCorpus() async throws {
             let embedder = MLXEmbedder(model: .bgeSmall)
             do {

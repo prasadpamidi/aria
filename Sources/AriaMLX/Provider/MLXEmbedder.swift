@@ -31,10 +31,16 @@
     /// | `.lfm2Embedding4bit`  |   350M | quantised, higher fidelity    |
     /// | `.qwen3Embedding4bit` |   600M | strongest here, largest       |
     ///
-    /// Nothing about which of those is *right* is settled by this file.
-    /// Run `ToolSelectionEval` over the consumer's own corpus — that
-    /// harness exists because the last three tuning decisions here were
-    /// intuition that field data later contradicted.
+    /// On Aria's tool-selection corpus, `.bgeSmall` answered every
+    /// case (100% hit, 0.76 MRR) against lexical's 67% / 0.61 and
+    /// `NLEmbedding`'s 58% / 0.39 — and fused with lexical reached
+    /// 0.79 MRR with nothing misled. See `MLXEmbedderEvalTests`.
+    ///
+    /// That is one corpus of twelve queries, so re-run
+    /// `ToolSelectionEval` against your own tool surface before
+    /// treating the ordering as settled. This harness exists because
+    /// the last three tuning decisions here were intuition that field
+    /// data later contradicted.
     public actor MLXEmbedder: Embedder {
         // MARK: Lifecycle
 
