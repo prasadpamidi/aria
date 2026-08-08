@@ -179,7 +179,7 @@
 
         private func run(
             messages: [Message],
-            executableTools _: [AnyTool],
+            executableTools: [AnyTool],
             continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation
         ) async throws {
             try Self.checkAvailability()
@@ -188,13 +188,30 @@
             // Build the typed FM tools. Each factory is invoked with a
             // closure that yields events into this stream's
             // continuation, so per-call `toolCallExecuted` events flow
-            // back through the agent layer. The agent's
-            // `executableTools` is intentionally unused — FM's iOS 26
-            // tool router only resolves compile-time `@Generable`
-            // arguments, so tools must reach the session through
-            // `typedTools`.
-            let fmTools: [any FoundationModels.Tool] = self.typedTools.map { factory in
+            // back through the agent layer. FM's iOS 26 tool router
+            // only resolves compile-time `@Generable` arguments, so the
+            // tools themselves must come from `typedTools` — but which
+            // of them to offer is the caller's decision.
+            //
+            // `executableTools` used to be ignored entirely, so every
+            // tool registered at construction reached the session on
+            // every turn no matter what the caller selected. With a
+            // large tool surface that silently overflows the model's
+            // 4,096-token window: an agent that had narrowed 27 tools
+            // to 8 still sent all 27, and the request was refused at
+            // 6,042 tokens.
+            let allTools: [any FoundationModels.Tool] = self.typedTools.map { factory in
                 factory { event in continuation.yield(event) }
+            }
+            // An empty selection means the caller expressed no
+            // preference — the definition-only entry point supplies
+            // none — so offer everything rather than nothing.
+            let fmTools: [any FoundationModels.Tool]
+            if executableTools.isEmpty {
+                fmTools = allTools
+            } else {
+                let selected = Set(executableTools.map(\.name))
+                fmTools = allTools.filter { selected.contains($0.name) }
             }
             let toolDefinitions = fmTools.map { Transcript.ToolDefinition(tool: $0) }
             let transcript = Self.buildTranscript(

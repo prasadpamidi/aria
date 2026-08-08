@@ -29,17 +29,31 @@ public protocol LLMProvider: Sendable {
         tools: [ToolDefinition],
         options: GenerationOptions
     ) -> AsyncThrowingStream<ProviderEvent, any Error>
+
+    /// Stream with executable `AnyTool`s instead of bare definitions.
+    ///
+    /// Providers that resolve tools inside their own model session —
+    /// `FoundationModelsProvider` among them — implement this to use
+    /// the `AnyTool` invocation closures directly and emit
+    /// `ProviderEvent.toolCallExecuted` once each call resolves. Others
+    /// inherit the default, which forwards to the definition-only form.
+    ///
+    /// **This is a protocol requirement, deliberately.** It lived in an
+    /// extension, where Swift dispatches statically: the agent holds
+    /// providers as `any LLMProvider`, so a conforming type's
+    /// implementation was never reached and every call fell through to
+    /// the default. `FoundationModelsProvider` therefore always
+    /// received an empty tool list and fell back to the full set given
+    /// at construction — silently ignoring per-turn tool selection and
+    /// overflowing its context window.
+    func stream(
+        messages: [Message],
+        executableTools: [AnyTool],
+        options: GenerationOptions
+    ) -> AsyncThrowingStream<ProviderEvent, any Error>
 }
 
 extension LLMProvider {
-    /// Stream with executable `AnyTool`s instead of bare definitions.
-    ///
-    /// Providers that resolve tools inside their own model session (e.g.
-    /// `FoundationModelsProvider`) override this method to use the
-    /// `AnyTool` invocation closures directly and emit
-    /// `ProviderEvent.toolCallExecuted` once each call resolves.
-    /// Providers that prefer to surface tool-call requests to the agent
-    /// layer can rely on the default forwarding implementation.
     public func stream(
         messages: [Message],
         executableTools: [AnyTool],
