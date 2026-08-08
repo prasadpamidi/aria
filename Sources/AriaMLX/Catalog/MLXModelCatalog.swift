@@ -207,11 +207,17 @@
         //
         // All five emit pythonic tool calls wrapped in the
         // `<|tool_call_start|>` / `<|tool_call_end|>` special tokens,
-        // which `ToolCallFormat.lfm2` parses via
-        // `PythonicToolCallParser`. `ToolCallFormat.infer` would also
-        // match these (it accepts any `lfm2*` model_type), but the
-        // format is set explicitly here to match how the rest of the
-        // catalog carries hand-checked flags.
+        // and `toolCallFormat` is deliberately left `nil`.
+        //
+        // The template emits a *list* inside one tag pair —
+        // `[get_weather(city="Paris"), current_time()]` — which
+        // `mlx-swift-lm`'s `ToolCallParser` cannot represent, since
+        // `parse` returns a single optional `ToolCall`. Given two
+        // calls it yields one corrupt call rather than dropping the
+        // second, so `MLXProvider` routes raw chunks through
+        // `LFM2ToolCallStreamParser` instead. Setting a format here
+        // would have the library parse in parallel and duplicate the
+        // calls.
         //
         // `family: "lfm2.5"` deliberately matches none of the
         // `usesQwenToolFormat` / `usesLlama3ToolFormat` /
@@ -237,8 +243,7 @@
             contextWindow: 128_000,
             supportsTools: true,
             reliability: .low,
-            recommendedRAMGigabytes: 2,
-            toolCallFormat: .lfm2
+            recommendedRAMGigabytes: 2
         )
 
         /// Liquid AI LFM2.5 VL 450M, 6-bit quantization. Smallest
@@ -267,7 +272,6 @@
             supportsVision: true,
             reliability: .low,
             recommendedRAMGigabytes: 2,
-            toolCallFormat: .lfm2,
             requiresOpenAIToolShapeOverride: true
         )
 
@@ -285,8 +289,7 @@
             contextWindow: 128_000,
             supportsTools: true,
             reliability: .low,
-            recommendedRAMGigabytes: 3,
-            toolCallFormat: .lfm2
+            recommendedRAMGigabytes: 3
         )
 
         /// Liquid AI LFM2.5 1.2B Thinking, 4-bit quantization. Same
@@ -312,8 +315,7 @@
             supportsTools: true,
             supportsReasoning: true,
             reliability: .low,
-            recommendedRAMGigabytes: 3,
-            toolCallFormat: .lfm2
+            recommendedRAMGigabytes: 3
         )
 
         /// Liquid AI LFM2.5 VL 1.6B, 4-bit quantization. The
@@ -330,8 +332,7 @@
             supportsTools: true,
             supportsVision: true,
             reliability: .low,
-            recommendedRAMGigabytes: 4,
-            toolCallFormat: .lfm2
+            recommendedRAMGigabytes: 4
         )
     }
 #endif

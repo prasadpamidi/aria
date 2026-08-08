@@ -385,6 +385,17 @@
             }
         }
 
+        private static func flatten(
+            _ events: [LFM2ToolCallStreamParser.Event]
+        ) -> [(String?, Aria.ToolCall?)] {
+            events.map { event in
+                switch event {
+                case let .textDelta(text): (text, nil)
+                case let .toolCall(call): (nil, call)
+                }
+            }
+        }
+
         /// Convert Aria's `[Message]` history into `MLXLMCommon.UserInput`.
         /// System messages collapse into a single instructions message
         /// (combined with `defaultInstructions`); user/assistant/tool
@@ -519,6 +530,10 @@
                 self.modelCapabilities.usesQwenToolFormat
                     ? QwenToolCallStreamParser()
                     : nil
+            var lfm2Parser: LFM2ToolCallStreamParser? =
+                self.modelCapabilities.usesLFM2ToolFormat
+                    ? LFM2ToolCallStreamParser()
+                    : nil
 
             for await event in generation {
                 try Task.checkCancellation()
@@ -527,6 +542,7 @@
                     gemma4Parser: &gemma4Parser,
                     llama3Parser: &llama3Parser,
                     qwenParser: &qwenParser,
+                    lfm2Parser: &lfm2Parser,
                     pendingToolCalls: &pendingToolCalls,
                     continuation: continuation
                 )
@@ -553,6 +569,13 @@
                     pendingToolCalls: &pendingToolCalls
                 )
             }
+            if var parser = lfm2Parser {
+                Self.dispatch(
+                    parserEvents: Self.flatten(parser.flush()),
+                    continuation: continuation,
+                    pendingToolCalls: &pendingToolCalls
+                )
+            }
 
             let finishReason: FinishReason = pendingToolCalls.isEmpty ? .endTurn : .toolUse
             continuation.yield(.messageStop(finishReason))
@@ -564,6 +587,7 @@
             gemma4Parser: inout Gemma4ToolCallStreamParser?,
             llama3Parser: inout Llama3ToolCallStreamParser?,
             qwenParser: inout QwenToolCallStreamParser?,
+            lfm2Parser: inout LFM2ToolCallStreamParser?,
             pendingToolCalls: inout [Aria.ToolCall],
             continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation
         ) {
@@ -591,6 +615,14 @@
                 } else if var parser = qwenParser {
                     let parserEvents = parser.process(text)
                     qwenParser = parser
+                    Self.dispatch(
+                        parserEvents: Self.flatten(parserEvents),
+                        continuation: continuation,
+                        pendingToolCalls: &pendingToolCalls
+                    )
+                } else if var parser = lfm2Parser {
+                    let parserEvents = parser.process(text)
+                    lfm2Parser = parser
                     Self.dispatch(
                         parserEvents: Self.flatten(parserEvents),
                         continuation: continuation,

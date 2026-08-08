@@ -226,6 +226,18 @@
             self.family.hasPrefix("qwen")
         }
 
+        /// `true` for the LFM2 family. Calls arrive as a pythonic
+        /// *list* inside one tag pair —
+        /// `<|tool_call_start|>[a(x=1), b()]<|tool_call_end|>` — which
+        /// `mlx-swift-lm`'s `ToolCallParser` cannot represent, since
+        /// `parse` returns a single optional `ToolCall`. Handed two
+        /// calls it produces one corrupt call rather than dropping the
+        /// second, so `MLXProvider` routes raw `.chunk` text through
+        /// `LFM2ToolCallStreamParser` instead.
+        public var usesLFM2ToolFormat: Bool {
+            self.family.hasPrefix("lfm2")
+        }
+
         /// `true` when the model's chat template requires the
         /// OpenAI Chat Completions message shape
         /// (`assistant.tool_calls` + `role:tool` with
