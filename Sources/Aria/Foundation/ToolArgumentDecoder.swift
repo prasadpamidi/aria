@@ -54,7 +54,9 @@ public enum ToolArgumentDecoder {
         public let arguments: [String: JSONValue]
         public let repair: Repair
 
-        public var value: JSONValue { .object(self.arguments) }
+        public var value: JSONValue {
+            .object(self.arguments)
+        }
     }
 
     /// Only raised when the tool genuinely needed arguments it did not
@@ -64,6 +66,8 @@ public enum ToolArgumentDecoder {
     public enum Failure: Error, Sendable, Equatable, CustomStringConvertible {
         case unreadable(raw: String, required: [String])
         case notAnObject(raw: String, required: [String])
+
+        // MARK: Public
 
         public var description: String {
             switch self {
@@ -191,7 +195,7 @@ public enum ToolArgumentDecoder {
         var body = text.drop(while: { $0 == "`" })
         // An opening fence may carry a language tag on its own line.
         if let newline = body.firstIndex(of: "\n") {
-            let tag = body[body.startIndex ..< newline]
+            let tag = body[body.startIndex..<newline]
             if tag.allSatisfy({ $0.isLetter || $0.isNumber }) {
                 body = body[body.index(after: newline)...]
             }
@@ -205,15 +209,27 @@ public enum ToolArgumentDecoder {
     /// Parse permissively — top-level fragments included — so the
     /// caller decides what shapes are acceptable rather than the parser
     /// rejecting them as malformed.
+    ///
+    /// The payload is wrapped in an object and decoded as a member of
+    /// it. That buys two things at once. Top-level fragment support
+    /// varies across Foundation versions and platforms, and a member
+    /// position is unambiguously supported everywhere. And it routes
+    /// through `JSONValue`'s own decoder, which tries `Bool` before the
+    /// numeric types — where `JSONSerialization` hands back `NSNumber`
+    /// for `true` and `1` alike, and telling them apart needs
+    /// `CFBooleanGetTypeID`, which does not exist off Darwin.
     private static func parse(_ text: String) -> JSONValue? {
-        guard !text.isEmpty,
-              let object = try? JSONSerialization.jsonObject(
-                  with: Data(text.utf8),
-                  options: [.fragmentsAllowed]
-              ) else {
+        guard !text.isEmpty else {
             return nil
         }
-        return Self.convert(object)
+        let wrapped = Data(("{\"value\":" + text + "}").utf8)
+        guard let object = try? JSONDecoder().decode(
+            [String: JSONValue].self,
+            from: wrapped
+        ) else {
+            return nil
+        }
+        return object["value"]
     }
 
     /// Find the first balanced `{…}` span, honouring string literals so
@@ -240,40 +256,12 @@ public enum ToolArgumentDecoder {
                 } else if character == "}" {
                     depth -= 1
                     if depth == 0 {
-                        return String(text[start ... index])
+                        return String(text[start...index])
                     }
                 }
             }
             index = text.index(after: index)
         }
         return nil
-    }
-
-    private static func convert(_ value: Any) -> JSONValue {
-        if value is NSNull {
-            return .null
-        }
-        // `NSNumber` bridges to Bool, Int and Double alike, so the
-        // boolean check has to precede the numeric ones or `true`
-        // decodes as `1`.
-        if let number = value as? NSNumber {
-            if CFGetTypeID(number) == CFBooleanGetTypeID() {
-                return .bool(number.boolValue)
-            }
-            if let integer = Int64(exactly: number) {
-                return .integer(integer)
-            }
-            return .number(number.doubleValue)
-        }
-        if let string = value as? String {
-            return .string(string)
-        }
-        if let array = value as? [Any] {
-            return .array(array.map(Self.convert))
-        }
-        if let dictionary = value as? [String: Any] {
-            return .object(dictionary.mapValues(Self.convert))
-        }
-        return .null
     }
 }
