@@ -23,6 +23,13 @@
     ///       -only-testing:AriaMLXTests/MLXEmbedderEvalTests \
     ///       -skipPackagePluginValidation -skipMacroValidation
     final class MLXEmbedderEvalTests: XCTestCase {
+        /// Opt-in for the same reason as the Apple eval: these fetch
+        /// weights from the Hub, which is unbounded network work that
+        /// does not belong in an ordinary test run.
+        static var assetEvalsEnabled: Bool {
+            ProcessInfo.processInfo.environment["ARIA_RUN_EVALS"] == "1"
+        }
+
         /// The comparison that decides which encoder ships.
         ///
         /// Measured on the field corpus (macOS, Xcode test run — the
@@ -52,6 +59,10 @@
         /// is the one conclusion that has survived every measurement
         /// here.
         func testBGESmallOnTheFieldCorpus() async throws {
+            try XCTSkipUnless(
+                Self.assetEvalsEnabled,
+                "Downloads bge-small; set ARIA_RUN_EVALS=1"
+            )
             let embedder = MLXEmbedder(model: .bgeSmall)
             do {
                 try await embedder.prepare()
@@ -86,6 +97,10 @@
         /// short string drifts toward whatever the pad token embeds to,
         /// and nothing about the shape of the result reveals it.
         func testEmbeddingsAreNormalisedAndDiscriminating() async throws {
+            try XCTSkipUnless(
+                Self.assetEvalsEnabled,
+                "Downloads bge-small; set ARIA_RUN_EVALS=1"
+            )
             let embedder = MLXEmbedder(model: .bgeSmall)
             do {
                 try await embedder.prepare()

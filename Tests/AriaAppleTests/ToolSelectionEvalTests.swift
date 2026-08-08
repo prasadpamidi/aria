@@ -21,6 +21,24 @@
     /// FIELD are queries that actually failed, with the answer that was
     /// actually wanted.
     final class ToolSelectionEvalTests: XCTestCase {
+        /// Evals that need model assets are opt-in.
+        ///
+        /// `NLContextualEmbedding` downloads its model on first use —
+        /// under 100MB, OS-managed, and unbounded. A unit suite must
+        /// not do that: on a fresh CI runner the request either adds
+        /// minutes to every build or never returns at all, and a test
+        /// that hangs is worse than one that fails, because nothing
+        /// says which test is stuck.
+        ///
+        /// It hung the macOS job exactly once, on the first run where
+        /// this file's contextual test actually executed — the two runs
+        /// before it were cancelled by pushes and never got there.
+        ///
+        ///     ARIA_RUN_EVALS=1 swift test --filter ToolSelectionEvalTests
+        static var assetEvalsEnabled: Bool {
+            ProcessInfo.processInfo.environment["ARIA_RUN_EVALS"] == "1"
+        }
+
         // MARK: - The comparison
 
         /// Prints every ranker over the same corpus.
@@ -79,6 +97,10 @@
         /// when they are unavailable: a network-dependent assertion in
         /// a unit suite is a flake, not a signal.
         func testContextualEmbeddingRanker() async throws {
+            try XCTSkipUnless(
+                Self.assetEvalsEnabled,
+                "Needs an asset download; set ARIA_RUN_EVALS=1"
+            )
             guard #available(iOS 17.0, macOS 14.0, *),
                   let embedder = NLContextualEmbedder() else {
                 throw XCTSkip("NLContextualEmbedding unavailable")
