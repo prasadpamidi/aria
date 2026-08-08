@@ -76,15 +76,31 @@
             /// `llama-3` / `gemma-4` would route LFM2.5 output into
             /// the wrong Aria-side stream parser instead of letting
             /// `mlx-swift-lm` parse the pythonic format.
-            func testLFM25UsesBuiltInPythonicParsingNotAnAriaStreamParser() {
+            /// Aria owns LFM2 tool parsing, so the library must not
+            /// parse in parallel — a format set here would duplicate
+            /// every call.
+            ///
+            /// The library cannot handle this format regardless: its
+            /// `ToolCallParser.parse` returns a single optional
+            /// `ToolCall`, while LFM2 emits a list inside one tag
+            /// pair. Given two calls it produces one corrupt call.
+            func testLFM25RoutesToTheAriaStreamParser() {
                 XCTAssertEqual(Self.lfm25Entries.count, 5)
                 for entry in Self.lfm25Entries {
-                    XCTAssertEqual(entry.toolCallFormat, .lfm2, entry.id)
+                    XCTAssertNil(entry.toolCallFormat, entry.id)
+                    XCTAssertTrue(entry.usesLFM2ToolFormat, entry.id)
                     XCTAssertTrue(entry.supportsTools, entry.id)
                     XCTAssertFalse(entry.usesQwenToolFormat, entry.id)
                     XCTAssertFalse(entry.usesLlama3ToolFormat, entry.id)
                     XCTAssertFalse(entry.usesGemma4ToolFormat, entry.id)
                 }
+            }
+
+            /// Families that own their parsing must not collide.
+            func testOtherFamiliesDoNotClaimTheLFM2Format() {
+                XCTAssertFalse(MLXModelCapabilities.qwen35MLX4B4bit.usesLFM2ToolFormat)
+                XCTAssertFalse(MLXModelCapabilities.gemma4E2BInstruct4bit.usesLFM2ToolFormat)
+                XCTAssertFalse(MLXModelCapabilities.llama32Instruct4bit.usesLFM2ToolFormat)
             }
 
             /// Only the explicitly named Thinking variant emits

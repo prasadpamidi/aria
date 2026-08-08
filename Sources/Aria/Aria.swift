@@ -21,7 +21,7 @@ public enum AriaInfo {
     ///
     /// Aria follows semantic versioning once it reaches `1.0.0`. Until then,
     /// breaking changes may occur on minor version bumps.
-    public static let version = "0.6.1"
+    public static let version = "0.7.0"
 }
 
 /// Internal logger used by core types. Backends are installed by the platform
