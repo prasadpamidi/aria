@@ -60,11 +60,54 @@ extension Character {
 public struct LexicalToolSelector: ToolSelector {
     // MARK: Lifecycle
 
-    public init(minimumScore: Double = 0.0) {
+    /// - Parameter stopWords: Terms discarded from the query before
+    ///   ranking. Injectable so its contribution can be *measured*
+    ///   rather than asserted — see `ToolSelectionEval`. A hardcoded
+    ///   constant is a parameter nobody can run an experiment against,
+    ///   and this list was twice grown on intuition alone.
+    public init(
+        minimumScore: Double = 0.0,
+        stopWords: Set<String> = LexicalToolSelector.defaultStopWords
+    ) {
         self.minimumScore = minimumScore
+        self.stopWords = stopWords
     }
 
     // MARK: Public
+
+    /// Terms carrying no signal about which tool is wanted.
+    ///
+    /// IDF weights by rarity *within the tool corpus*, which is not the
+    /// same as informativeness — and the two come apart exactly here.
+    /// Across twenty tools the word "quick" appears about once, so IDF
+    /// scores it as highly discriminative and "give me a quick recipe
+    /// idea" selects `run_quick_add_to_groceries_remix`. The adjective
+    /// decided the match; "recipe", the word that mattered, matched
+    /// nothing.
+    ///
+    /// A corpus-statistical measure cannot notice this on its own,
+    /// because in a small corpus a junk term genuinely is rare. The
+    /// list is short on purpose: generic verbs and adjectives that
+    /// appear in requests regardless of intent. Anything domain-shaped
+    /// stays in, since a stopword list that grows starts deleting
+    /// meaning.
+    public static let defaultStopWords: Set<String> = [
+        "give", "get", "make", "show", "tell", "find", "help", "want",
+        "need", "like", "know", "think", "look", "try", "use", "have",
+        "quick", "fast", "easy", "simple", "good", "nice", "new", "best",
+        "some", "any", "thing", "idea", "please", "can", "could", "would",
+        "about", "with", "for", "the", "and", "you", "your", "what",
+        "how", "why", "when", "where", "who", "this", "that",
+        // Words that frame *when* something holds rather than *what* is
+        // being asked about. "What's my current weight?" scored
+        // `current_time` and `get_weather` on "current", sent nothing
+        // about weight, and left the model with no tool that could
+        // answer — the "quick" failure again with a different
+        // adjective. Recency words attach to any request regardless of
+        // its subject, which is exactly the property that makes them
+        // worthless for telling tools apart.
+        "current", "currently", "now", "today", "latest", "recent",
+    ]
 
     public func select(
         from tools: [ToolDefinition],
@@ -74,7 +117,7 @@ public struct LexicalToolSelector: ToolSelector {
         guard limit > 0, !tools.isEmpty else {
             return []
         }
-        let queryTerms = Set(Self.tokenize(query)).subtracting(Self.stopWords)
+        let queryTerms = Set(Self.tokenize(query)).subtracting(self.stopWords)
         guard !queryTerms.isEmpty else {
             return []
         }
@@ -116,40 +159,6 @@ public struct LexicalToolSelector: ToolSelector {
     }
 
     // MARK: Internal
-
-    /// Terms carrying no signal about which tool is wanted.
-    ///
-    /// IDF weights by rarity *within the tool corpus*, which is not the
-    /// same as informativeness — and the two come apart exactly here.
-    /// Across twenty tools the word "quick" appears about once, so IDF
-    /// scores it as highly discriminative and "give me a quick recipe
-    /// idea" selects `run_quick_add_to_groceries_remix`. The adjective
-    /// decided the match; "recipe", the word that mattered, matched
-    /// nothing.
-    ///
-    /// A corpus-statistical measure cannot notice this on its own,
-    /// because in a small corpus a junk term genuinely is rare. The
-    /// list is short on purpose: generic verbs and adjectives that
-    /// appear in requests regardless of intent. Anything domain-shaped
-    /// stays in, since a stopword list that grows starts deleting
-    /// meaning.
-    static let stopWords: Set<String> = [
-        "give", "get", "make", "show", "tell", "find", "help", "want",
-        "need", "like", "know", "think", "look", "try", "use", "have",
-        "quick", "fast", "easy", "simple", "good", "nice", "new", "best",
-        "some", "any", "thing", "idea", "please", "can", "could", "would",
-        "about", "with", "for", "the", "and", "you", "your", "what",
-        "how", "why", "when", "where", "who", "this", "that",
-        // Words that frame *when* something holds rather than *what* is
-        // being asked about. "What's my current weight?" scored
-        // `current_time` and `get_weather` on "current", sent nothing
-        // about weight, and left the model with no tool that could
-        // answer — the "quick" failure again with a different
-        // adjective. Recency words attach to any request regardless of
-        // its subject, which is exactly the property that makes them
-        // worthless for telling tools apart.
-        "current", "currently", "now", "today", "latest", "recent",
-    ]
 
     /// Lowercased alphanumeric terms, split on punctuation *and*
     /// camelCase boundaries.
@@ -230,6 +239,7 @@ public struct LexicalToolSelector: ToolSelector {
     }
 
     private let minimumScore: Double
+    private let stopWords: Set<String>
 
     /// Name, description, and parameter names.
     ///
