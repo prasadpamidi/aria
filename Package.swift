@@ -307,6 +307,16 @@ let package = Package(
                     package: "mlx-swift-lm",
                     condition: .when(platforms: [.iOS, .macOS, .visionOS], traits: ["MLX"])
                 ),
+                // Embedding models (BERT / Nomic BERT / Qwen3 / Gemma3 /
+                // LFM2). Backs `MLXEmbedder`, which lets tool selection
+                // and memory recall rank by meaning rather than by
+                // shared words — `NLEmbedding` measured *worse* than
+                // plain lexical matching on Aria's selection eval.
+                .product(
+                    name: "MLXEmbedders",
+                    package: "mlx-swift-lm",
+                    condition: .when(platforms: [.iOS, .macOS, .visionOS], traits: ["MLX"])
+                ),
                 .product(
                     name: "MLXLMHuggingFace",
                     package: "swift-huggingface-mlx",

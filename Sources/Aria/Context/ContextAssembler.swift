@@ -131,7 +131,15 @@ public struct DefaultContextAssembler: ContextAssembler {
         let toolTokens = selectedTools.reduce(0) { $0 + self.tokenCounter.count(tool: $1.definition) }
 
         let remaining = max(0, budget.available - promptTokens - toolTokens)
-        let history = self.windowMessages(state.messages, limit: remaining)
+        // Bound each result before windowing. Windowing can only drop
+        // whole messages oldest-first and never drops the newest, so a
+        // few very large recent results are beyond its reach entirely —
+        // it trims the conversation down to nothing and still overflows.
+        let (bounded, truncated) = self.boundToolResults(
+            state.messages,
+            limit: budget.toolResultTokenLimit
+        )
+        let history = self.windowMessages(bounded, limit: remaining)
 
         var messages: [Message] = []
         if let prompt, !prompt.isEmpty {
@@ -149,7 +157,8 @@ public struct DefaultContextAssembler: ContextAssembler {
             toolsSelected: selectedTools.count,
             selectedToolNames: selectedTools.map(\.name),
             messagesDropped: history.dropped,
-            memoriesDropped: 0
+            memoriesDropped: 0,
+            toolResultsTruncated: truncated
         )
         self.onAllocation?(allocation)
 
@@ -314,6 +323,64 @@ public struct DefaultContextAssembler: ContextAssembler {
         }
 
         return selected
+    }
+
+    /// Cap each tool result at `limit` tokens, returning the bounded
+    /// messages and how many were cut.
+    ///
+    /// Truncation is marked rather than silent. A model handed a
+    /// fragment it believes is complete will answer confidently from
+    /// half a document; one told the result was cut can say so, or call
+    /// again more narrowly.
+    private func boundToolResults(
+        _ messages: [Message],
+        limit: Int
+    ) -> (messages: [Message], truncated: Int) {
+        guard limit > 0 else {
+            return (messages, 0)
+        }
+        var truncated = 0
+        let bounded = messages.map { message -> Message in
+            guard message.role == .tool else {
+                return message
+            }
+            let text = message.textContent
+            guard self.tokenCounter.count(text: text) > limit,
+                  let shortened = self.truncate(text, to: limit) else {
+                return message
+            }
+            truncated += 1
+            return .tool(callId: message.toolCallId ?? "", text: shortened)
+        }
+        return (bounded, truncated)
+    }
+
+    /// Longest prefix of `text` that fits in `limit` tokens once the
+    /// marker is included.
+    ///
+    /// Binary search over the counter rather than a characters-per-token
+    /// assumption, so a counter backed by a real tokenizer stays correct
+    /// where a ratio would not.
+    private func truncate(_ text: String, to limit: Int) -> String? {
+        let marker = "\n\n… [truncated to fit the context window]"
+        let markerCost = self.tokenCounter.count(text: marker)
+        let budget = limit - markerCost
+        guard budget > 0 else {
+            return marker
+        }
+
+        let characters = Array(text)
+        var low = 0
+        var high = characters.count
+        while low < high {
+            let middle = (low + high + 1) / 2
+            if self.tokenCounter.count(text: String(characters[0..<middle])) <= budget {
+                low = middle
+            } else {
+                high = middle - 1
+            }
+        }
+        return String(characters[0..<low]) + marker
     }
 
     /// Trim oldest history until it fits, preserving system messages.

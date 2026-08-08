@@ -1,3 +1,4 @@
+import Aria
 import Foundation
 
 // MARK: - SkillPromptBuilder
@@ -24,24 +25,140 @@ import Foundation
 public enum SkillPromptBuilder {
     // MARK: Public
 
+    /// Catalogue only the skills that relate to what was asked.
+    ///
+    /// The unranked overload below advertises every enabled skill on
+    /// every turn, and the model picks from that flat list by name.
+    /// Observed: asked "What's my current weight?", a model loaded
+    /// *Structured output schemas*, *Email style guide* and *Markdown
+    /// formatting guide* in sequence — three round-trips and seven
+    /// seconds spent choosing blind from an undifferentiated menu,
+    /// ending in a context overflow.
+    ///
+    /// Skills were the last part of the request with no selection at
+    /// all. Tools are ranked and share-capped; skills were neither. A
+    /// skill is a name and a description, which is exactly the shape
+    /// `ToolSelector` already ranks, so the same selector a consumer
+    /// uses for tools works here unchanged — including a fused
+    /// lexical + semantic one.
+    ///
+    /// - Parameters:
+    ///   - query: The user's turn. Ranking is per-turn, like tools.
+    ///   - selector: Ranks the loadable skills.
+    ///   - limit: Most skills to advertise.
+    ///   - inlineBodyLimit: Characters allowed per always-inline body,
+    ///     or `nil` for no cap.
+    ///
+    ///     Inline bodies are pasted verbatim into instructions, and the
+    ///     assembler never trims instructions — deliberately, since a
+    ///     half-truncated system prompt changes behaviour worse than a
+    ///     short history does. That makes a few large inline skills the
+    ///     one input that can exceed the window with no recourse at
+    ///     all, so the cap belongs here, where the text is still known
+    ///     to be a skill body rather than anonymous prompt.
     public static func systemPromptBlock(
         provider: SkillProvider,
-        allowedSkillIDs: Set<UUID>? = nil
-    ) -> String {
-        let baseline = provider.enabledSkills()
-        let skills: [Skill] =
-            if let allowed = allowedSkillIDs {
-                // Honour per-scope overrides: keep globally
-                // enabled ∩ allowed, then add any extras the user
-                // attached that aren't in the global set.
-                Self.resolve(allowed: allowed, baseline: baseline, provider: provider)
-            } else {
-                baseline
-            }
+        allowedSkillIDs: Set<UUID>? = nil,
+        query: String,
+        selector: any ToolSelector,
+        limit: Int = 8,
+        inlineBodyLimit: Int? = 4000
+    ) async -> String {
+        let skills = self.resolvedSkills(provider: provider, allowedSkillIDs: allowedSkillIDs)
         guard !skills.isEmpty else {
             return ""
         }
         let (inline, callable) = Self.partition(skills)
+        let ranked = await Self.rank(callable, query: query, selector: selector, limit: limit)
+        return Self.render(
+            inline: inline,
+            callable: ranked,
+            provider: provider,
+            inlineBodyLimit: inlineBodyLimit
+        )
+    }
+
+    /// Advertise every enabled skill, unranked.
+    ///
+    /// Correct when the catalogue is small enough that relevance can't
+    /// pay for itself. Past a handful, prefer the ranked overload: the
+    /// cost of an unrelated skill is not only its line in the prompt
+    /// but the chance the model loads it, which costs a whole
+    /// round-trip and a body-sized tool result.
+    public static func systemPromptBlock(
+        provider: SkillProvider,
+        allowedSkillIDs: Set<UUID>? = nil
+    ) -> String {
+        let skills = self.resolvedSkills(provider: provider, allowedSkillIDs: allowedSkillIDs)
+        guard !skills.isEmpty else {
+            return ""
+        }
+        let (inline, callable) = Self.partition(skills)
+        return Self.render(
+            inline: inline,
+            callable: callable,
+            provider: provider,
+            inlineBodyLimit: nil
+        )
+    }
+
+    // MARK: Private
+
+    private static func resolvedSkills(
+        provider: SkillProvider,
+        allowedSkillIDs: Set<UUID>?
+    ) -> [Skill] {
+        let baseline = provider.enabledSkills()
+        guard let allowed = allowedSkillIDs else {
+            return baseline
+        }
+        // Honour per-scope overrides: keep globally enabled ∩ allowed,
+        // then add any extras the user attached that aren't in the
+        // global set.
+        return Self.resolve(allowed: allowed, baseline: baseline, provider: provider)
+    }
+
+    /// Rank the loadable skills against the turn.
+    ///
+    /// An empty ranking means the selector found no signal, not that
+    /// nothing is relevant — the same reading `DefaultContextAssembler`
+    /// gives it. In that case advertise everything rather than hiding
+    /// the catalogue on a query the ranker simply could not score.
+    private static func rank(
+        _ skills: [Skill],
+        query: String,
+        selector: any ToolSelector,
+        limit: Int
+    ) async -> [Skill] {
+        // Only rank under pressure, matching `DefaultContextAssembler`.
+        // A catalogue that already fits has nothing to gain from
+        // ranking and everything to lose: a selector that matches two
+        // of three skills would advertise two, hiding a skill that
+        // cost nothing to list.
+        guard skills.count > limit else {
+            return skills
+        }
+        let definitions = skills.map { skill in
+            ToolDefinition(
+                name: skill.name,
+                description: skill.description,
+                inputSchema: .object(properties: [:], required: [])
+            )
+        }
+        let ranked = await selector.select(from: definitions, query: query, limit: limit)
+        guard !ranked.isEmpty else {
+            return Array(skills.prefix(limit))
+        }
+        let byName = Dictionary(skills.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
+        return ranked.compactMap { byName[$0.name] }
+    }
+
+    private static func render(
+        inline: [Skill],
+        callable: [Skill],
+        provider: SkillProvider,
+        inlineBodyLimit: Int?
+    ) -> String {
         var lines: [String] = []
         if !inline.isEmpty {
             lines.append("--- Skills (inline) ---")
@@ -50,7 +167,7 @@ public enum SkillPromptBuilder {
                 lines.append(skill.description)
                 if let body = try? provider.loadBody(for: skill.id), !body.isEmpty {
                     lines.append("")
-                    lines.append(body)
+                    lines.append(Self.bounded(body, limit: inlineBodyLimit))
                 }
             }
             lines.append("")
@@ -68,7 +185,15 @@ public enum SkillPromptBuilder {
         return lines.joined(separator: "\n")
     }
 
-    // MARK: Private
+    /// Cap an inline body, marking the cut so the model knows it is
+    /// reading a fragment and can call `load_skill` for the whole thing.
+    private static func bounded(_ body: String, limit: Int?) -> String {
+        guard let limit, limit > 0, body.count > limit else {
+            return body
+        }
+        return String(body.prefix(limit))
+            + "\n\n… [skill truncated to fit the context window — call load_skill for the full text]"
+    }
 
     private static func partition(_ skills: [Skill]) -> (inline: [Skill], callable: [Skill]) {
         var inline: [Skill] = []
