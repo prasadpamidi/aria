@@ -65,6 +65,71 @@ final class ToolBudgetCeilingTests: XCTestCase {
         )
     }
 
+    /// The end-to-end case this was all for: six MCP-sized schemas on a
+    /// 4,096-token window. Uncompacted, one of them alone busts the
+    /// share and the model gets a single tool. Compacted, several fit.
+    func testCompactionLetsSeveralMCPToolsThrough() async throws {
+        let pinned = Self.tool(named: "load_skill", descriptionLength: 40)
+        let weather = (0 ..< 6).map { Self.mcpSizedTool(named: "weather_mcp__tool_\($0)") }
+        let assembler = DefaultContextAssembler(
+            pinnedToolNames: ["load_skill"],
+            unrankedFillLimit: 0
+        )
+        var state = AgentState()
+        state.messages = [.user("weather forecast for dublin")]
+
+        let budget = ContextBudget(total: 4096, reservedForOutput: 768, maxTools: 6)
+        let assembled = await assembler.assemble(
+            systemPrompt: "You are helpful.",
+            tools: [pinned] + weather,
+            state: state,
+            budget: budget
+        )
+
+        let sent = assembled.tools.filter { $0.name.hasPrefix("weather_mcp__") }
+        XCTAssertGreaterThan(
+            sent.count,
+            1,
+            "compaction bought nothing: \(assembled.tools.map(\.name))"
+        )
+        let counter = HeuristicTokenCounter()
+        let cost = assembled.tools.reduce(0) { $0 + counter.count(tool: $1.definition) }
+        XCTAssertLessThanOrEqual(cost, budget.toolTokenLimit)
+    }
+
+    /// Sized and shaped like a published MCP schema: a paragraph of
+    /// description and several documented parameters.
+    private static func mcpSizedTool(named name: String) -> AnyTool {
+        AnyTool(
+            definition: ToolDefinition(
+                name: name,
+                description: String(
+                    repeating: "Retrieve weather forecast conditions for a location, "
+                        + "including temperature, precipitation, wind, humidity and alerts. ",
+                    count: 20
+                ),
+                inputSchema: .object(
+                    properties: [
+                        "location": .string(
+                            description: String(repeating: "City name or coordinates. ", count: 24),
+                            enumValues: nil
+                        ),
+                        "units": .string(
+                            description: String(repeating: "Measurement system to use. ", count: 24),
+                            enumValues: ["metric", "imperial"]
+                        ),
+                        "detail": .string(
+                            description: String(repeating: "How much detail to return. ", count: 24),
+                            enumValues: nil
+                        ),
+                    ],
+                    required: ["location"]
+                )
+            ),
+            invoke: { _, _ in .object([:]) }
+        )
+    }
+
     /// Small tools are unaffected — the ceiling must not become a cap
     /// that starves ordinary surfaces.
     func testSmallToolSurfacesAreNotTrimmed() async throws {

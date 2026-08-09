@@ -355,17 +355,26 @@ public struct DefaultContextAssembler: ContextAssembler {
         _ selected: [AnyTool],
         required: [AnyTool],
         ceiling: Int,
-        cost: (AnyTool) -> Int
+        cost: (AnyTool) -> Int,
+        compact: (AnyTool, Int) -> (AnyTool, ToolCompaction)
     ) -> [AnyTool] {
         let requiredNames = Set(required.map(\.name))
         var kept = required
         var spent = required.reduce(0) { $0 + cost($1) }
         for tool in selected where !requiredNames.contains(tool.name) {
-            let next = cost(tool)
+            // Try to make it fit before deciding it does not.
+            //
+            // A published MCP schema is mostly prose — a paragraph of
+            // description and a dozen documented parameters — and the
+            // model needs almost none of it to make the call. Dropping
+            // that first turns "no room for this tool" into "room for
+            // three", without removing anything the call depends on.
+            let (candidate, level) = compact(tool, ceiling - spent)
+            let next = cost(candidate)
             guard spent + next <= ceiling else {
                 break
             }
-            kept.append(tool)
+            kept.append(level == .none ? tool : candidate)
             spent += next
         }
 
@@ -486,7 +495,15 @@ public struct DefaultContextAssembler: ContextAssembler {
                     selected,
                     required: requiredTools,
                     ceiling: ceiling,
-                    cost: { self.tokenCounter.count(tool: $0.definition) }
+                    cost: { self.tokenCounter.count(tool: $0.definition) },
+                    compact: { tool, room in
+                        let (definition, level) = ToolDefinitionCompactor.compact(
+                            tool.definition,
+                            toFit: room,
+                            counter: self.tokenCounter
+                        )
+                        return (tool.replacingDefinition(definition), level)
+                    }
                 ),
                 rankedNames
             )
