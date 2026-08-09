@@ -7,34 +7,91 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/prasadpamidi/aria?include_prereleases&sort=semver&label=latest)](https://github.com/prasadpamidi/aria/releases)
 
-**Composable on-device + remote agent runtime for Apple platforms.**
+**Agents that run on the user's device, and survive contact with a 4,096-token window.**
 
-Aria is a Swift library for building agent-driven applications. The
-default path runs on-device using Apple's FoundationModels, MLX, or
-Core ML; the same `Agent` and `WorkflowKit` surfaces also drive
-remote OpenAI / Anthropic / Gemini / OpenAI-compatible providers
-(see [Remote-LLM orchestration](#remote-llm-orchestration) below for
-the current limitations). Aria provides a tool-calling agent
-runtime, type-safe abstractions over LLMs, memory primitives, a
-workflow runtime with native + JS-plugin capabilities, an Anthropic-
-style skill system, and an optional graph orchestration layer.
+Aria is a Swift library for building agent-driven apps on Apple platforms. The
+default path runs on-device via FoundationModels or MLX; the same `Agent` surface
+drives OpenAI / Anthropic / Gemini when you need to reach further.
 
-The core is platform-agnostic and builds on Linux. Apple-specific
-implementations live in `AriaApple`.
+```swift
+let agent = Agent(config: AgentConfig(
+    provider: FoundationModelsProvider(typedTools: [weatherTool]),
+    tools: [weatherTool.anyTool],
+    systemPrompt: "You are a concise assistant."
+))
 
-> **Status:** Layers 1–6 are implemented and tested on iOS 26 / macOS 26 / Linux. Headline features:
->
-> - Tool-calling **Agent** with streaming events, the full middleware stack (history persistence, windowing, summarization, RAG retrieval, automatic fact extraction), and **provider-agnostic** structured-output `respond(_:as:)` that works against FoundationModels and any cloud `LLMProvider`.
-> - **WorkflowKit** runtime — Codable workflow model, GRDB persistence, compile-to-`StateGraph` engine, capability broker for native iOS frameworks, JS plugin steps, per-step server-LLM routing, MCP integration, skill resolution. See [`docs/workflowkit.md`](docs/workflowkit.md).
-> - **AgentKit** runtime — Codable `AgentDefinition`, file-per-row JSON store, capability-to-tool bridging, `ProposeTool` + `AgentApprovalSink` for human-in-the-loop side-effects, checkpoint middleware, in-loop validator with retry cap. Apple-only; injects the host's MCP / workflow / plugin / skill tool surfaces via closures. See [`docs/agentkit.md`](docs/agentkit.md).
-> - **Skills** — Anthropic-style instruction bundles (`SKILL.md` frontmatter + body) with `SkillProvider`, on-demand `load_skill` tool, per-thread / per-workflow overrides via `SkillOverridesStore`. See [`docs/skills.md`](docs/skills.md).
-> - **JS plugin tools** — sandboxed `JSContext`-based runtime (`AriaToolsJS`) that loads `.aria-tool` bundles. Capabilities (HTTP, JSON, clipboard, share, notify, storage) are gated by per-bundle manifest declarations and enforced at bridge-construction time. See [`docs/plugins.md`](docs/plugins.md).
-> - **Native capabilities** — Keychain-backed secrets, Calendar / Reminders, HealthKit, CoreLocation, EventKit, Files, Clipboard, Share, Notifications, HTTP, Focus, Shortcuts. Wrapped behind a `CapabilityBroker` that enforces per-plugin grants.
-> - **StateGraph** with conditional edges, parallel branches + reducers, agent-as-node helpers, and resumable runs via the `Checkpointer`.
-> - **Memory layer** with persistent SQLite chat history + vector store (`GRDBChatHistory`, `GRDBVectorStore`), `NLEmbeddingEmbedder` for on-device embeddings, and `HistoryRetentionPolicy` for bounded disk growth.
-> - **Long-thread strategies that just compose**: `HistoryWindowMiddleware` (turns + token caps), `HistorySummarizationMiddleware` (compress older portion into a summary system message), `FactExtractionMiddleware` (auto-mine durable user facts into `MemoryStore`).
-> - **OpenTelemetry-compatible observability** via `swift-distributed-tracing` + `swift-metrics`. Spans use OTel GenAI semantic conventions; backends like Phoenix / Honeycomb auto-render the runs.
-> - **Session recording + replay** via `SessionRecorder` + `SessionReplayer` (in `AriaTesting`). Capture a run as a `SessionBundle` JSON, ship it anywhere, replay against a fresh agent for regression tests, prompt experiments, or debugging.
+for try await event in agent.stream(.message(.user("What's the weather in Berlin?"))) {
+    if case let .textDelta(text) = event { print(text, terminator: "") }
+}
+```
+
+That much you could write against Apple's API directly. What Aria adds is
+everything that goes wrong afterwards.
+
+## Why this exists
+
+On-device models are small. The interesting problems are not "how do I call a
+tool" — they are what happens on turn nine, with thirty tools registered, a
+memory store, and a 4,096-token ceiling that **refuses** rather than truncates.
+Every item below is a failure observed in a shipping app, and the fix is in the
+box:
+
+| What goes wrong | What Aria does |
+|---|---|
+| Request refused at 4,096 tokens, whole turn lost | `ContextAssembler` budgets prompt + tools + history together, and reports where every token went |
+| 30 tools in the prompt; the model calls the wrong one | `ToolSelector` ranks per turn — lexical, embedding, or fused |
+| A model invents a "fact" about the user; it is stored forever | `MemoryGate` provenance: a fact must trace back to what the user actually said |
+| A tool fails and the model fabricates the answer instead | Failure guidance travels with the result |
+| Swapping your embedding model silently empties memory | Vectors are keyed by embedder identity, with a re-embed migration |
+| A thinking model's `<think>` blocks eat the history budget | Past-turn reasoning is not budgeted |
+
+None of these are theoretical. [Release notes](https://github.com/prasadpamidi/aria/releases)
+carry the traces.
+
+## Measure it, don't trust it
+
+Tool selection is the part most likely to be wrong for *your* tool surface, so
+`AriaTesting` ships the harness rather than just the numbers:
+
+```swift
+let report = await ToolSelectionEval(corpus: myTools, cases: myQueries)
+    .run(mySelector, label: "fused")
+// fused: hit 100% · top-1 67% · MRR 0.79 · misled 0% · avg sent 7.5
+```
+
+Measured on one 12-query corpus, each fused with lexical matching:
+
+| encoder | hit | MRR | avg tools sent |
+|---|---|---|---|
+| lexical only | 67% | 0.61 | — |
+| + `NLEmbedding` | 58% | 0.39 | — |
+| + Apple contextual | 92% | 0.72 | 10.0 |
+| + MLX `bge-small` | **100%** | **0.79** | **7.5** |
+
+Apple's `NLEmbedding` measures *worse than no encoder at all* — averaged static
+word vectors put everything user-shaped near everything else. That is the kind of
+thing you only learn by measuring, which is why the harness ships.
+
+## What's in the box
+
+- **Agent** — tool-calling loop, streaming events, middleware (history, windowing,
+  summarization, RAG, fact extraction), provider-agnostic structured output.
+- **Context** — `ContextAssembler`, `ContextBudget`, `TokenCounter`, `ToolSelector`.
+- **Memory** — SQLite history + vector store, embedder abstraction, gated writes.
+- **WorkflowKit** — Codable workflows, capability broker, JS plugin steps, MCP.
+  [docs](docs/workflowkit.md)
+- **AgentKit** — Codable agent definitions, human-in-the-loop approval, checkpoints.
+  [docs](docs/agentkit.md)
+- **Skills** — Anthropic-style `SKILL.md` bundles with on-demand loading.
+  [docs](docs/skills.md)
+- **Observability** — OpenTelemetry GenAI spans; session record + replay for
+  regression tests.
+
+Core is platform-agnostic and builds on Linux. Apple-specific implementations
+live in `AriaApple`.
+
+> **Status:** 0.x and moving. Used in production by two apps. Breaking changes
+> land on minor versions and are listed in the release notes.
 
 ---
 
