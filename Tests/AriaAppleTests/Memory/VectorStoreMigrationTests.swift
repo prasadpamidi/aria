@@ -1,4 +1,4 @@
-#if canImport(GRDB)
+#if canImport(Foundation) && (os(iOS) || os(macOS) || os(watchOS) || os(tvOS) || os(visionOS))
     import Aria
     @testable import AriaApple
     import AriaTesting
