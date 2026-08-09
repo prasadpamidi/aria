@@ -42,6 +42,24 @@ tool budget. Three trials of the corpus each:
 Read the first row honestly: under about twenty tools, **use Apple's API
 directly** — the assembler has nothing to relieve and can only cost you.
 
+That row survived a deliberate attempt to break it. The obvious objection is
+that Apple's API cannot *rank*, so selection should pay off before the window
+fills — and the first corpus padded with `calculator` and `base64_codec` was
+too easy to test that. Re-run at twenty tools with confusable near-neighbours
+instead (`start_fast`, `end_fast`, `get_fasting_stats` beside
+`get_fasting_status`), both arms fit the window:
+
+| 20 tools | bare provider | with the context layer |
+|---|---|---|
+| easy distractors | 83% | 83% |
+| confusable distractors | 83% | 83% |
+
+No separation. The on-device model picks correctly among near-neighbours on
+its own, and ranking does not improve on it. Caveat worth stating: tool
+accuracy sat at 83% in every arm, so this corpus is saturated and could not
+have detected a small gain. The claim is "no effect large enough for six
+cases to see", not "no effect".
+
 The second row is the reason this package exists. Connect one MCP server and
 fifty tools arrive at once; the request crosses 4,096 tokens and
 FoundationModels throws `exceededContextWindowSize` rather than truncating.

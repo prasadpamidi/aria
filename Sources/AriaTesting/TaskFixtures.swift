@@ -69,6 +69,38 @@ public enum TaskFixtures {
         ("shortcut_run", "Run a named shortcut."),
     ]
 
+    /// - Parameter surfaceSize: Pad the surface with `distractors` up
+    ///   to this many tools. `nil` keeps the twelve-tool surface.
+    /// Near-neighbours of the tools these cases actually need.
+    ///
+    /// The `distractors` list above is *easy*: `calculator` and
+    /// `base64_codec` are trivially distinguishable from "how's my
+    /// fasting going?", so a surface padded with them tests whether
+    /// the window overflows and little else. That made the twelve-tool
+    /// comparison a weak test of picking, and it is the reason it
+    /// showed no difference.
+    ///
+    /// Real surfaces are not like that. An app that can report a fast
+    /// can also start one, end one, and summarise the history — four
+    /// tools sharing a stem, one of which is right. These are the
+    /// confusions the field traces actually show: a question answered
+    /// by a *write*, a "today" tool answered by a history tool.
+    public static let confusableDistractors: [(String, String)] = [
+        ("niora__start_fast", "Begin a new fast for the user."),
+        ("niora__end_fast", "End the user's current fast."),
+        ("niora__get_fasting_stats", "Aggregate fasting history: streaks, averages, and totals over time."),
+        ("niora__get_hydration_history", "Water intake totals for previous days."),
+        ("niora__set_hydration_goal", "Set the user's daily water intake target."),
+        ("niora__log_meal", "Log a meal the user ate."),
+        ("niora__log_weight", "Log a body weight measurement."),
+        ("niora__log_activity", "Log a completed physical activity."),
+        ("niora__update_profile", "Update the user's profile fields."),
+        ("niora__get_preferences", "The user's app preferences and units."),
+        ("current_date", "Get today's calendar date."),
+        ("timezone_lookup", "Look up the timezone for a place."),
+        ("world_clock", "Get the current time in a named city."),
+    ]
+
     /// A realistic surface: a health server, a second server, built-ins.
     public static func tools() -> [AnyTool] {
         [
@@ -111,9 +143,20 @@ public enum TaskFixtures {
         ]
     }
 
-    /// - Parameter surfaceSize: Pad the surface with `distractors` up
-    ///   to this many tools. `nil` keeps the twelve-tool surface.
-    public static func cases(surfaceSize: Int? = nil) -> [TaskCase] {
+    /// - Parameters:
+    ///   - surfaceSize: Pad with `distractors` to this many tools.
+    ///   - confusable: Pad with `confusableDistractors` instead —
+    ///     tools that share stems and subject matter with the ones the
+    ///     cases need, which is what a real app surface looks like.
+    public static func cases(surfaceSize: Int? = nil, confusable: Bool = false) -> [TaskCase] {
+        if confusable {
+            var surface = Self.tools()
+            for (name, description) in Self.confusableDistractors
+                where surfaceSize.map({ surface.count < $0 }) ?? true {
+                surface.append(Self.tool(name, description, #"{"result": ""}"#))
+            }
+            return Self.cases(on: surface)
+        }
         var surface = Self.tools()
         if let surfaceSize {
             for (name, description) in Self.distractors
@@ -121,7 +164,13 @@ public enum TaskFixtures {
                 surface.append(Self.tool(name, description, #"{"result": ""}"#))
             }
         }
-        return [
+        return Self.cases(on: surface)
+    }
+
+    // MARK: Private
+
+    private static func cases(on surface: [AnyTool]) -> [TaskCase] {
+        [
             // FIELD: the tool was called correctly and the answer
             // contradicted it — `time_remaining: "00:00:00"` became
             // "you have 16 hours left". Ranking metrics score this
@@ -189,8 +238,6 @@ public enum TaskFixtures {
             ),
         ]
     }
-
-    // MARK: Private
 
     /// A tool that returns a fixed payload, so grounding is checkable:
     /// the answer either carries what the tool said or it does not.

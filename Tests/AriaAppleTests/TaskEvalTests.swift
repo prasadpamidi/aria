@@ -78,6 +78,51 @@
             print("\n" + configured.summary() + "\n")
         }
 
+        /// Does selection help *below* the overflow threshold, when the
+        /// tools are confusable?
+        ///
+        /// The twelve-tool comparison found no difference, and the
+        /// distractors are the likely reason: `calculator` and
+        /// `base64_codec` are trivially distinguishable from "how's my
+        /// fasting going?", so nothing was being asked of picking. The
+        /// field traces show the opposite shape — `start_fast` beside
+        /// `get_fasting_status`, `log_weight` beside `log_water` — a
+        /// question answered by a write.
+        ///
+        /// Both surfaces are twenty tools and both fit the window, so
+        /// count and overflow are held constant and confusability is
+        /// the only variable.
+        func testConfusableSurfaceBelowTheOverflowThreshold() async throws {
+            for confusable in [false, true] {
+                let label = confusable ? "confusable" : "easy"
+                let cases = TaskFixtures.cases(surfaceSize: 20, confusable: confusable)
+                let eval = TaskEval(cases: cases, trials: 3)
+
+                let bare = await eval.run(label: "bare · 20 \(label)") { testCase in
+                    Agent(config: AgentConfig(
+                        provider: Self.provider(for: testCase),
+                        tools: testCase.tools,
+                        systemPrompt: Self.systemPrompt
+                    ))
+                }
+                let configured = await eval.run(label: "configured · 20 \(label)") { testCase in
+                    Agent(config: AgentConfig(
+                        provider: Self.provider(for: testCase),
+                        tools: testCase.tools,
+                        systemPrompt: Self.systemPrompt,
+                        contextAssembler: DefaultContextAssembler(unrankedFillLimit: 0),
+                        contextBudget: ContextBudget(
+                            total: 4096,
+                            reservedForOutput: 768,
+                            maxTools: 6
+                        )
+                    ))
+                }
+                print("\n" + bare.summary())
+                print(configured.summary() + "\n")
+            }
+        }
+
         func testHarnessAgainstBareProvider() async throws {
             // Three passes over the corpus, not one. Two runs of the
             // *identical* configuration scored 83% and 67% — with six
