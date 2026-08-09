@@ -28,6 +28,28 @@ for try await event in agent.stream(.message(.user("What's the weather in Berlin
 That much you could write against Apple's API directly. What Aria adds is
 everything that goes wrong afterwards.
 
+## The number
+
+Same six tasks, same on-device model, same prompts. One arm is a bare
+`FoundationModelsProvider`; the other adds a context assembler and a per-turn
+tool budget. Three trials of the corpus each:
+
+| tool surface | bare provider | with Aria's context layer |
+|---|---|---|
+| 12 tools — fits the window | **83%** | 78% |
+| 50 tools — does not fit | **0%** (every turn refused) | **83%** |
+
+Read the first row honestly: under about twenty tools, **use Apple's API
+directly** — the assembler has nothing to relieve and can only cost you.
+
+The second row is the reason this package exists. Connect one MCP server and
+fifty tools arrive at once; the request crosses 4,096 tokens and
+FoundationModels throws `exceededContextWindowSize` rather than truncating.
+Not a worse answer — no answer, on every single turn. That is the wall Aria
+is built for, and the crossover is the whole story.
+
+Run it yourself: `ARIA_RUN_EVALS=1 swift test --filter TaskEvalTests`.
+
 ## Why this exists
 
 On-device models are small. The interesting problems are not "how do I call a
@@ -67,6 +89,19 @@ Measured on one 12-query corpus, each fused with lexical matching:
 | + `NLEmbedding` | 58% | 0.39 | — |
 | + Apple contextual | 92% | 0.72 | 10.0 |
 | + MLX `bge-small` | **100%** | **0.79** | **7.5** |
+
+Skills flood the same window, and get the same treatment. A catalogue is
+pasted whole into every turn unless it is ranked — and each irrelevant skill
+is not just its line in the prompt but a chance the model *loads* it, costing
+a round-trip and a body-sized result. Ten skills, five queries:
+
+| catalogue | recall | irrelevant skills offered / turn | block size |
+|---|---|---|---|
+| unranked | 100% | 9.4 | 350 tok |
+| ranked, lexical | 100% | **0.2** | **60 tok** |
+
+Recall is the constraint, not the headline: ranking that hides the skill a
+turn needs is worse than no ranking at all.
 
 Apple's `NLEmbedding` measures *worse than no encoder at all* — averaged static
 word vectors put everything user-shaped near everything else. That is the kind of

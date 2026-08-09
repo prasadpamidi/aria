@@ -49,6 +49,9 @@ let package = Package(
         // Mocks, fixtures, and test helpers. Cross-platform.
         .library(name: "AriaTesting", targets: ["AriaTesting"]),
 
+        // Evals for the skill catalogue — see `WorkflowKitTesting`.
+        .library(name: "WorkflowKitTesting", targets: ["WorkflowKitTesting"]),
+
         // Apple system-framework implementations: FoundationModels,
         // NLEmbedding, GRDB-backed memory, OSLog.
         .library(name: "AriaApple", targets: ["AriaApple"]),
@@ -237,6 +240,17 @@ let package = Package(
             name: "AriaTesting",
             dependencies: ["Aria"],
             path: "Sources/AriaTesting"
+        ),
+
+        // Skill-catalogue evals. Separate from `AriaTesting` on
+        // purpose: these need `WorkflowKit`, which pulls GRDB and the
+        // MCP SDK, and `AriaTesting` is imported by every test target
+        // including the Linux ones. A testing helper that drags two
+        // heavy dependencies behind it stops being cheap to import.
+        .target(
+            name: "WorkflowKitTesting",
+            dependencies: ["Aria", "WorkflowKit"],
+            path: "Sources/WorkflowKitTesting"
         ),
 
         .target(
@@ -442,7 +456,7 @@ let package = Package(
 
         .testTarget(
             name: "WorkflowKitTests",
-            dependencies: ["WorkflowKit", "Aria", "AriaTesting"],
+            dependencies: ["WorkflowKit", "Aria", "AriaTesting", "WorkflowKitTesting"],
             path: "Tests/WorkflowKitTests"
         ),
 
