@@ -48,13 +48,17 @@ public struct MCPClient: Sendable {
         serverURL: URL,
         credential: MCPCredential? = nil,
         clientName: String = MCPClient.defaultClientName,
-        clientVersion: String = "1.0"
+        clientVersion: String = "1.0",
+        streaming: Bool = false,
+        onToolsChanged: (@Sendable () -> Void)? = nil
     ) {
         self.serverURL = serverURL
         self.credential = credential
         self.clientName = clientName
         self.clientVersion = clientVersion
         self.transportFactory = nil
+        self.streaming = streaming
+        self.onToolsChanged = onToolsChanged
     }
 
     /// Test seam: supply the transport instead of building an
@@ -69,13 +73,17 @@ public struct MCPClient: Sendable {
         credential: MCPCredential?,
         clientName: String,
         clientVersion: String,
-        transportFactory: @escaping @Sendable () -> any Transport
+        transportFactory: @escaping @Sendable () -> any Transport,
+        streaming: Bool = false,
+        onToolsChanged: (@Sendable () -> Void)? = nil
     ) {
         self.serverURL = serverURL
         self.credential = credential
         self.clientName = clientName
         self.clientVersion = clientVersion
         self.transportFactory = transportFactory
+        self.streaming = streaming
+        self.onToolsChanged = onToolsChanged
     }
 
     // MARK: Public
@@ -251,15 +259,18 @@ public struct MCPClient: Sendable {
     private let clientName: String
     private let clientVersion: String
     private let transportFactory: (@Sendable () -> any Transport)?
+    private let streaming: Bool
+    private let onToolsChanged: (@Sendable () -> Void)?
 
     private static func makeTransport(
         endpoint: URL,
-        credential: MCPCredential?
+        credential: MCPCredential?,
+        streaming: Bool
     ) -> MCP.HTTPClientTransport {
         let authorization = Self.authorizationHeader(for: credential)
         return MCP.HTTPClientTransport(
             endpoint: endpoint,
-            streaming: false,
+            streaming: streaming,
             requestModifier: { request in
                 guard let authorization else {
                     return request
@@ -423,17 +434,39 @@ public struct MCPClient: Sendable {
         let endpoint = self.serverURL
         let credential = self.credential
         let override = self.transportFactory
+        let streaming = self.streaming
+        // Built up front with an explicit type: inlining this at the
+        // call site defeated the type checker outright.
+        let onConnect: (@Sendable (MCP.Client) async -> Void)? =
+            if let notify = self.onToolsChanged {
+                { client in
+                    // The server tells us its tools changed; the app
+                    // re-lists rather than serving a stale cache until
+                    // someone opens Settings and taps refresh.
+                    await client.onNotification(ToolListChangedNotification.self) { _ in
+                        notify()
+                    }
+                }
+            } else {
+                nil
+            }
         do {
             return try await MCPSessionPool.shared.withClient(
                 key: MCPSessionKey(
                     endpoint: endpoint,
                     credentialFingerprint: Self.fingerprint(credential),
                     clientName: self.clientName,
-                    clientVersion: self.clientVersion
+                    clientVersion: self.clientVersion,
+                    streaming: streaming
                 ),
                 makeTransport: {
-                    override?() ?? Self.makeTransport(endpoint: endpoint, credential: credential)
+                    override?() ?? Self.makeTransport(
+                        endpoint: endpoint,
+                        credential: credential,
+                        streaming: streaming
+                    )
                 },
+                onConnect: onConnect,
                 body: body
             )
         } catch {

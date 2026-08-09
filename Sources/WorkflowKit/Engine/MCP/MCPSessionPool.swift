@@ -15,6 +15,11 @@ struct MCPSessionKey: Hashable {
     let credentialFingerprint: Int
     let clientName: String
     let clientVersion: String
+    /// Streaming and non-streaming transports are different
+    /// connections, not a setting on one. Sharing a session between
+    /// them would hand a caller expecting server-initiated
+    /// notifications a transport that cannot deliver them.
+    var streaming = false
 }
 
 // MARK: - MCPSessionPool
@@ -59,11 +64,16 @@ actor MCPSessionPool {
     func withClient<T: Sendable>(
         key: MCPSessionKey,
         makeTransport: @Sendable () -> any Transport,
+        onConnect: (@Sendable (Client) async -> Void)? = nil,
         body: @Sendable (Client) async throws -> T
     ) async throws -> T {
         self.evictExpired()
         do {
-            let client = try await self.connectedClient(for: key, makeTransport: makeTransport)
+            let client = try await self.connectedClient(
+                for: key,
+                makeTransport: makeTransport,
+                onConnect: onConnect
+            )
             let value = try await body(client)
             self.sessions[key]?.touch()
             return value
@@ -72,7 +82,11 @@ actor MCPSessionPool {
                 throw error
             }
             await self.drop(key)
-            let client = try await self.connectedClient(for: key, makeTransport: makeTransport)
+            let client = try await self.connectedClient(
+                for: key,
+                makeTransport: makeTransport,
+                onConnect: onConnect
+            )
             let value = try await body(client)
             self.sessions[key]?.touch()
             return value
@@ -147,12 +161,17 @@ actor MCPSessionPool {
 
     private func connectedClient(
         for key: MCPSessionKey,
-        makeTransport: @Sendable () -> any Transport
+        makeTransport: @Sendable () -> any Transport,
+        onConnect: (@Sendable (Client) async -> Void)? = nil
     ) async throws -> Client {
         if let existing = self.sessions[key] {
             return existing.client
         }
         let client = Client(name: key.clientName, version: key.clientVersion)
+        // Handlers are registered *before* connecting: a server may
+        // emit `tools/list_changed` immediately after initialize, and a
+        // handler attached afterwards would miss it.
+        await onConnect?(client)
         _ = try await client.connect(transport: makeTransport())
         self.sessions[key] = Session(client: client)
         return client

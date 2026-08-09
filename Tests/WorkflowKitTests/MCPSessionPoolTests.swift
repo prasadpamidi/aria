@@ -237,3 +237,36 @@ final class MCPSessionPoolTests: XCTestCase {
         )
     }
 }
+
+// MARK: - MCPStreamingSessionTests
+
+final class MCPStreamingSessionTests: XCTestCase {
+    /// Streaming and non-streaming are different transports, so they
+    /// must not share a session. A caller that turned streaming on to
+    /// receive `tools/list_changed` would otherwise be handed a pooled
+    /// connection that cannot deliver notifications.
+    func testStreamingModeGetsItsOwnSession() async throws {
+        let counter = FakeMCPTransport.ConnectCounter()
+        let pool = MCPSessionPool()
+        let base = MCPSessionKey(
+            endpoint: URL(string: "https://example.test/mcp")!,
+            credentialFingerprint: 0,
+            clientName: "test",
+            clientVersion: "1.0",
+            streaming: false
+        )
+        var streamingKey = base
+        streamingKey.streaming = true
+
+        for key in [base, streamingKey, base] {
+            _ = try await pool.withClient(
+                key: key,
+                makeTransport: { FakeMCPTransport(counter: counter) },
+                body: { client in try await client.listTools(cursor: nil).0.count }
+            )
+        }
+        // Two sessions for three calls: the third reuses the first.
+        XCTAssertEqual(counter.count, 2)
+        await pool.closeAll()
+    }
+}
