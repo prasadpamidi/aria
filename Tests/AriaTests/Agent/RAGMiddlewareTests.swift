@@ -127,8 +127,21 @@ final class RAGMiddlewareTests: XCTestCase {
 /// trim. One field trace carried "## Recalled memories" twice, the same
 /// two facts in different orders. By turn ten there would have been ten.
 final class RAGStalenessTests: XCTestCase {
+    /// Local factory rather than borrowing `RAGMiddlewareTests`'s.
+    ///
+    /// Instantiating another `XCTestCase` to reach an instance method
+    /// compiles on Apple platforms and not on Linux, where
+    /// swift-corelibs-xctest has no zero-argument initialiser.
+    static func makeMemoryStore() -> DefaultMemoryStore {
+        let embedder = HashEmbedder(dimensions: 64)
+        return DefaultMemoryStore(
+            embedder: embedder,
+            store: InMemoryVectorStore(dimensions: embedder.dimensions)
+        )
+    }
+
     func testOnlyTheCurrentRecallBlockSurvives() async throws {
-        let store = RAGMiddlewareTests().makeMemoryStore()
+        let store = Self.makeMemoryStore()
         try await store.remember(MemoryItem(content: "user lives in Berlin"), namespace: ["u"])
         let middleware = RAGMiddleware(
             memoryStore: store,
@@ -153,7 +166,7 @@ final class RAGStalenessTests: XCTestCase {
     /// business — dropping the caller's instructions would be a far
     /// worse bug than the one being fixed.
     func testUnrelatedSystemMessagesAreUntouched() async throws {
-        let store = RAGMiddlewareTests().makeMemoryStore()
+        let store = Self.makeMemoryStore()
         try await store.remember(MemoryItem(content: "user lives in Berlin"), namespace: ["u"])
         let middleware = RAGMiddleware(
             memoryStore: store,

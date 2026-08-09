@@ -20,6 +20,24 @@
     /// an accent yields a non-ASCII name.
     @available(iOS 26.0, macOS 26.0, *)
     final class FoundationModelsToolRegistrationTests: XCTestCase {
+        /// Same guard the sibling FoundationModels suites use.
+        ///
+        /// XCTest's Objective-C-driven discovery instantiates every
+        /// class regardless of `@available`, so a suite whose fixtures
+        /// touch FoundationModels metadata runs on hosts where the
+        /// framework cannot back them — and aborts the whole process
+        /// with signal 6 rather than failing one test. That took CI
+        /// down while every other FM suite skipped cleanly.
+        override func setUpWithError() throws {
+            guard #available(iOS 26.0, macOS 26.0, *) else {
+                throw XCTSkip("Requires iOS 26 / macOS 26 runtime")
+            }
+            try XCTSkipUnless(
+                SystemLanguageModel.default.isAvailable,
+                "Requires an available on-device model to build @Generable tools"
+            )
+        }
+
         func testDuplicateNamesAreRejectedKeepingTheFirst() {
             let (accepted, rejected) = FoundationModelsProvider.registrable([
                 StubTool(name: "run_morning_brief"),

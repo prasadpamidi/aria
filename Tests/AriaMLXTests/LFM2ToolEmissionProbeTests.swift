@@ -47,6 +47,20 @@
                     "NEW",
                     "You are Avyra, a concise, helpful assistant.\n\nWhen a tool can answer part of the request, call it and use its result. Never write out a value a tool would have returned, and never leave a placeholder in your reply."
                 ),
+                // Candidate: says nothing about *how* to call a tool —
+                // the failure mode of OLD and NEW — and only about what
+                // may be claimed afterwards.
+                (
+                    "GROUNDING",
+                    """
+                    You are Avyra, a concise, helpful assistant.
+
+                    State only what the conversation or a tool result actually says. \
+                    If a tool fails or returns nothing, say so plainly rather than \
+                    filling the gap. If a tool needs a value you were not given, ask \
+                    for it — never invent one, and never leave a placeholder in a reply.
+                    """
+                ),
             ]
             let store = MLXModelStore()
 
