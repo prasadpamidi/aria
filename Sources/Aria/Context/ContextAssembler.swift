@@ -115,7 +115,7 @@ public struct DefaultContextAssembler: ContextAssembler {
         state: AgentState,
         budget: ContextBudget
     ) async -> AssembledContext {
-        let selectedTools = await self.selectTools(
+        let (selectedTools, rankedNames) = await self.selectTools(
             from: tools,
             state: state,
             budget: budget
@@ -162,6 +162,9 @@ public struct DefaultContextAssembler: ContextAssembler {
             toolsSelected: selectedTools.count,
             selectedToolNames: selectedTools.map(\.name),
             offeredToolNames: tools.map(\.name),
+            rankedToolNames: rankedNames,
+            maxTools: budget.maxTools,
+            toolTokenLimit: budget.toolTokenLimit,
             messagesDropped: history.dropped,
             memoriesDropped: 0,
             toolResultsTruncated: truncated
@@ -378,13 +381,19 @@ public struct DefaultContextAssembler: ContextAssembler {
             .reduce(0) { $0 + self.tokenCounter.count(message: $1) }
     }
 
+    /// - Returns: The tools to send, and — separately — what ranking
+    ///   chose *before* the token ceiling trimmed it. The difference
+    ///   between those two lists is the whole diagnosis when a tool
+    ///   goes missing: empty `ranked` means the ranker found nothing,
+    ///   while a full `ranked` and a short `selected` means the budget
+    ///   did the cutting. Both look identical from the outside.
     private func selectTools(
         from tools: [AnyTool],
         state: AgentState,
         budget: ContextBudget
-    ) async -> [AnyTool] {
+    ) async -> (selected: [AnyTool], ranked: [String]) {
         guard !tools.isEmpty else {
-            return []
+            return ([], [])
         }
 
         let maxTools = budget.maxTools ?? Int.max
@@ -400,7 +409,7 @@ public struct DefaultContextAssembler: ContextAssembler {
         // where it was absent.
         let totalCost = tools.reduce(0) { $0 + self.tokenCounter.count(tool: $1.definition) }
         if tools.count <= maxTools, totalCost <= ceiling {
-            return tools
+            return (tools, tools.map(\.name))
         }
 
         let required = self.pinnedToolNames
@@ -414,7 +423,7 @@ public struct DefaultContextAssembler: ContextAssembler {
         // only costs tokens.
         let room = maxTools == Int.max ? candidates.count : max(0, maxTools - requiredTools.count)
         guard room > 0, !candidates.isEmpty else {
-            return requiredTools
+            return (requiredTools, [])
         }
 
         let ranked = await self.selector.select(
@@ -424,6 +433,7 @@ public struct DefaultContextAssembler: ContextAssembler {
         )
         let byName = Dictionary(candidates.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
         var selected = requiredTools + ranked.compactMap { byName[$0.name] }
+        let rankedNames = selected.map(\.name)
 
         // Fill only when ranking had nothing to say.
         //
@@ -447,11 +457,14 @@ public struct DefaultContextAssembler: ContextAssembler {
         // and a half-empty context window is only a problem if the tool
         // the user needed is the part that's missing.
         guard selected.count == requiredTools.count else {
-            return Self.fitting(
-                selected,
-                required: requiredTools,
-                ceiling: ceiling,
-                cost: { self.tokenCounter.count(tool: $0.definition) }
+            return (
+                Self.fitting(
+                    selected,
+                    required: requiredTools,
+                    ceiling: ceiling,
+                    cost: { self.tokenCounter.count(tool: $0.definition) }
+                ),
+                rankedNames
             )
         }
 
@@ -459,7 +472,7 @@ public struct DefaultContextAssembler: ContextAssembler {
         // ranker, so the caller decides — see `unrankedFillLimit`.
         let fillCeiling = self.unrankedFillLimit ?? maxTools
         guard fillCeiling > 0 else {
-            return selected
+            return (selected, rankedNames)
         }
         var chosen = Set(selected.map(\.name))
         var spent = selected.reduce(0) { $0 + self.tokenCounter.count(tool: $1.definition) }
@@ -479,7 +492,7 @@ public struct DefaultContextAssembler: ContextAssembler {
             filled += 1
         }
 
-        return selected
+        return (selected, rankedNames)
     }
 
     /// Cap each tool result at `limit` tokens, returning the bounded
