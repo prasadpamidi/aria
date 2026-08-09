@@ -112,6 +112,22 @@ public struct ToolSelectionReport: Sendable {
     }
 
     /// Mean reciprocal rank over the first expected tool.
+    /// Mean number of tools returned per query.
+    ///
+    /// The metric this suite was missing. Recall and top-1 say whether
+    /// the right tool was offered; neither notices that four wrong ones
+    /// came with it. A model asked the time was sent `timezone_math`,
+    /// `calculator`, `get_weather` and `get_fasting_status` alongside
+    /// `current_time` — every extra one is something it can call
+    /// instead of answering.
+    public var averageSelected: Double {
+        guard !self.outcomes.isEmpty else {
+            return 0
+        }
+        let total = self.outcomes.reduce(0) { $0 + $1.selected.count }
+        return Double(total) / Double(self.outcomes.count)
+    }
+
     public var meanReciprocalRank: Double {
         guard !self.outcomes.isEmpty else {
             return 0
@@ -133,7 +149,7 @@ public struct ToolSelectionReport: Sendable {
     /// query that broke rather than only moving a number.
     public func summary() -> String {
         var lines = [
-            "\(self.label): hit \(Self.percent(self.hitRate)) · top-1 \(Self.percent(self.topOneRate)) · MRR \(String(format: "%.2f", self.meanReciprocalRank)) · misled \(Self.percent(self.misleadRate))",
+            "\(self.label): hit \(Self.percent(self.hitRate)) · top-1 \(Self.percent(self.topOneRate)) · MRR \(String(format: "%.2f", self.meanReciprocalRank)) · misled \(Self.percent(self.misleadRate)) · avg sent \(String(format: "%.1f", self.averageSelected))",
         ]
         for outcome in self.failures {
             let mark = outcome.misled ? "MISLED" : "MISS"

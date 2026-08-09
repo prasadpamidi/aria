@@ -141,7 +141,9 @@ final class HeuristicTokenCounterTests: XCTestCase {
 final class ContextBudgetTests: XCTestCase {
     func testAvailableSubtractsOutputReserve() {
         let budget = ContextBudget(total: 4096, reservedForOutput: 512)
-        XCTAssertEqual(budget.available, 3584)
+        // The margin is deliberate: an under-count is fatal on a
+        // provider that refuses rather than truncates.
+        XCTAssertEqual(budget.available, 3226)
     }
 
     /// A reserve larger than the window would otherwise produce a

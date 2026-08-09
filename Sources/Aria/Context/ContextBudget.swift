@@ -67,13 +67,15 @@ public struct ContextBudget: Sendable, Equatable {
         reservedForOutput: Int = 512,
         maxTools: Int? = nil,
         maxToolShare: Double = 0.4,
-        maxToolResultShare: Double = 0.25
+        maxToolResultShare: Double = 0.25,
+        safetyMargin: Double = 0.1
     ) {
         self.total = max(0, total)
         self.reservedForOutput = max(0, min(reservedForOutput, self.total))
         self.maxTools = maxTools.map { max(0, $0) }
         self.maxToolShare = min(max(0, maxToolShare), 1)
         self.maxToolResultShare = min(max(0, maxToolResultShare), 1)
+        self.safetyMargin = min(max(0, safetyMargin), 0.5)
     }
 
     // MARK: Public
@@ -93,6 +95,22 @@ public struct ContextBudget: Sendable, Equatable {
     /// Fraction of `available` any single tool result may occupy.
     public let maxToolResultShare: Double
 
+    /// Fraction of the window held back to absorb estimator error.
+    ///
+    /// Token counts here are estimates — core carries no vendor
+    /// tokenizer — and the estimate is not symmetric in consequence.
+    /// Over-counting trims a little history. Under-counting is fatal on
+    /// a provider that refuses rather than truncates: FoundationModels
+    /// rejected a request at 4,110 tokens against a 4,096 ceiling that
+    /// the assembler believed it had stayed under, and the whole turn
+    /// was lost.
+    ///
+    /// A margin does not make the estimate right, and is not a
+    /// substitute for counting the things that were being missed
+    /// outright. It buys the room for the estimate to be somewhat wrong
+    /// in the direction it is known to err.
+    public let safetyMargin: Double
+
     /// Token ceiling for tool definitions.
     public var toolTokenLimit: Int {
         Int(Double(self.available) * self.maxToolShare)
@@ -108,7 +126,8 @@ public struct ContextBudget: Sendable, Equatable {
 
     /// Tokens the assembler may spend on input.
     public var available: Int {
-        self.total - self.reservedForOutput
+        let usable = self.total - self.reservedForOutput
+        return max(0, usable - Int(Double(usable) * self.safetyMargin))
     }
 }
 

@@ -21,6 +21,38 @@ public protocol TokenCounter: Sendable {
     /// quoted keys, and nesting all tokenize far denser than prose, so
     /// measuring a schema with a prose ratio understates it badly.
     func count(tool: ToolDefinition) -> Int
+
+    /// Tokens for a whole message as the provider will serialize it.
+    ///
+    /// Not the same as `count(text:)` on its body. A message carries a
+    /// role marker and separators, and an assistant turn that requests
+    /// a tool often has *no* text at all — its entire cost is the call
+    /// name and arguments. Budgeting history by body text alone
+    /// therefore prices a tool-calling turn at nearly zero, which is
+    /// exactly the turn most likely to overflow.
+    func count(message: Message) -> Int
+}
+
+extension TokenCounter {
+    /// Role marker plus separators the chat template spends per
+    /// message. Small individually; a tool-calling turn produces two
+    /// messages per call, so it compounds fast.
+    public var perMessageEnvelopeTokens: Int {
+        4
+    }
+
+    public func count(message: Message) -> Int {
+        var total = self.count(text: message.textContent)
+        for call in message.toolCalls {
+            total += self.count(text: call.name)
+            if let data = try? call.arguments.canonicalData() {
+                // Arguments are JSON, so they tokenize denser than
+                // prose — same reason schemas get their own ratio.
+                total += max(1, Int((Double(data.count) / 3.0).rounded(.up)))
+            }
+        }
+        return total + self.perMessageEnvelopeTokens
+    }
 }
 
 // MARK: - HeuristicTokenCounter

@@ -39,7 +39,9 @@ final class ContextAssemblerTests: XCTestCase {
             allocation.totalTokens,
             allocation.systemPromptTokens + allocation.toolTokens + allocation.historyTokens
         )
-        XCTAssertEqual(allocation.budgetAvailable, 3584)
+        // 4096 - 512 output reserve, less the 10% safety margin
+        // that absorbs estimator error. See `ContextBudget.safetyMargin`.
+        XCTAssertEqual(allocation.budgetAvailable, 3226)
     }
 
     /// Tool schemas must dominate the accounting when a surface is
@@ -299,7 +301,7 @@ final class ContextAllocationReportingTests: XCTestCase {
         XCTAssertNotNil(reported)
         XCTAssertEqual(reported?.toolsOffered, 1)
         XCTAssertGreaterThan(reported?.toolTokens ?? 0, 0)
-        XCTAssertEqual(reported?.budgetAvailable, 3584)
+        XCTAssertEqual(reported?.budgetAvailable, 3226)
         XCTAssertEqual(
             reported?.selectedToolNames,
             ["get_weather"],
@@ -688,6 +690,285 @@ final class ToolResultBoundingTests: XCTestCase {
         XCTAssertEqual(
             assembled.messages.first { $0.role == .tool }?.toolCallId,
             "call-42"
+        )
+    }
+}
+
+// MARK: - InvokedToolScopeTests
+
+/// A tool called on one turn must not lead the ranking on the next.
+///
+/// Keeping previously-invoked tools available is correct *within* a
+/// turn — a tool result the model is still reasoning about needs its
+/// tool present or the call becomes unresolvable. Across turns it is a
+/// bug: pinned tools bypass ranking and lead the list, so one hydration
+/// lookup made `get_hydration_today` the first tool offered for "What
+/// about fasting status?" two turns later, and it held a slot on every
+/// turn after that.
+final class InvokedToolScopeTests: XCTestCase {
+    /// The field case: last turn's tool must not outrank this turn's.
+    func testPriorTurnsToolDoesNotLeadThisTurn() async {
+        let assembler = DefaultContextAssembler()
+        var tools = [
+            Self.tool("get_hydration_today", "How much water the user has drunk today."),
+            Self.tool("get_fasting_status", "Whether the user is fasting now."),
+        ]
+        tools.append(contentsOf: (0 ..< 15).map {
+            Self.tool("other_\($0)", "Unrelated capability \($0).")
+        })
+
+        // Turn one asked about water and called the hydration tool;
+        // turn two asks about fasting.
+        let state = AgentState(messages: [
+            .user("how much water did I drink"),
+            .assistant("", toolCalls: [ToolCall(id: "1", name: "get_hydration_today", arguments: .object([:]))]),
+            .tool(callId: "1", text: "{\"total_ml\": 0}"),
+            .user("what about fasting status?"),
+        ])
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: tools,
+            state: state,
+            budget: ContextBudget(total: 4096, maxTools: 6)
+        )
+
+        XCTAssertEqual(
+            assembled.tools.first?.name,
+            "get_fasting_status",
+            "This turn's subject leads, not last turn's tool"
+        )
+    }
+
+    /// The behaviour being scoped, not removed: mid-turn, a tool whose
+    /// result is still in play stays available.
+    func testToolStaysAvailableWithinTheSameTurn() async {
+        let assembler = DefaultContextAssembler()
+        var tools = [Self.tool("get_hydration_today", "How much water the user has drunk today.")]
+        tools.append(contentsOf: (0 ..< 15).map {
+            Self.tool("other_\($0)", "Unrelated capability \($0).")
+        })
+
+        // No new user message after the call — still the same turn.
+        let state = AgentState(messages: [
+            .user("zzzz qqqq"),
+            .assistant("", toolCalls: [ToolCall(id: "1", name: "get_hydration_today", arguments: .object([:]))]),
+            .tool(callId: "1", text: "{\"total_ml\": 0}"),
+        ])
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: tools,
+            state: state,
+            budget: ContextBudget(total: 4096, maxTools: 6)
+        )
+
+        XCTAssertTrue(
+            assembled.tools.contains { $0.name == "get_hydration_today" },
+            "A result still being reasoned about needs its tool present"
+        )
+    }
+
+    private static func tool(_ name: String, _ description: String) -> AnyTool {
+        AnyTool(
+            definition: ToolDefinition(
+                name: name,
+                description: description,
+                inputSchema: .object(properties: [:], required: [])
+            ),
+            invoke: { _, _ in .null }
+        )
+    }
+}
+
+// MARK: - PastReasoningTests
+
+/// A thinking model's scratchpad is for the turn that produced it.
+///
+/// Chat templates already discard it — LFM2's strips every assistant
+/// block but the last. Budgeting against it anyway is worse than
+/// wasteful: real messages get dropped to make room for text the
+/// template then throws away. Observed on LFM2.5 Thinking as 1,980
+/// tokens of history and four dropped messages across five short
+/// exchanges.
+final class PastReasoningTests: XCTestCase {
+    func testPastTurnsReasoningIsNotBudgeted() async {
+        let assembler = DefaultContextAssembler()
+        let thinking = "<think>" + String(repeating: "deliberating ", count: 400) + "</think>Yes."
+        let state = AgentState(messages: [
+            .user("how's my fasting?"),
+            .assistant(thinking),
+            .user("what about water?"),
+        ])
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: [],
+            state: state,
+            budget: ContextBudget(total: 4096, reservedForOutput: 768)
+        )
+
+        let history = assembled.messages.map(\.textContent).joined()
+        XCTAssertFalse(history.contains("deliberating"), "Past reasoning must not be budgeted")
+        XCTAssertTrue(history.contains("Yes."), "The answer it produced still matters")
+    }
+
+    /// The current turn keeps its scratchpad — a step that loses its
+    /// own working-out starts over.
+    func testCurrentTurnKeepsItsReasoning() async {
+        let assembler = DefaultContextAssembler()
+        let state = AgentState(messages: [
+            .user("how's my fasting?"),
+            .assistant("<think>still working</think>"),
+        ])
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: [],
+            state: state,
+            budget: ContextBudget(total: 4096, reservedForOutput: 768)
+        )
+
+        XCTAssertTrue(
+            assembled.messages.map(\.textContent).joined().contains("still working")
+        )
+    }
+
+    /// A stream cut mid-thought would otherwise leave the whole
+    /// remainder in place — the oversized case this exists to prevent.
+    func testUnterminatedReasoningIsStillRemoved() async {
+        let assembler = DefaultContextAssembler()
+        let state = AgentState(messages: [
+            .user("first"),
+            .assistant("<think>" + String(repeating: "cut off ", count: 400)),
+            .user("second"),
+        ])
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: [],
+            state: state,
+            budget: ContextBudget(total: 4096, reservedForOutput: 768)
+        )
+
+        XCTAssertFalse(assembled.messages.map(\.textContent).joined().contains("cut off"))
+    }
+
+    /// Messages without reasoning pass through untouched.
+    @MainActor
+    func testOrdinaryMessagesAreUnchanged() async {
+        let assembler = DefaultContextAssembler()
+        let state = AgentState(messages: [
+            .user("first"),
+            .assistant("A plain answer."),
+            .user("second"),
+        ])
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: [],
+            state: state,
+            budget: ContextBudget(total: 4096, reservedForOutput: 768)
+        )
+
+        XCTAssertTrue(assembled.messages.map(\.textContent).joined().contains("A plain answer."))
+    }
+}
+
+// MARK: - UnrankedFillTests
+
+/// How much to read into "nothing scored" depends on the ranker.
+///
+/// Filling to the cap is the right hedge for a ranker that misses. It
+/// is wrong for one that doesn't: told "I live in Dublin, CA", a model
+/// was handed `http_request`, `base64_codec`, `start_fast` and
+/// `log_water` — none related to anything — and answered by inventing a
+/// call to a weather API, then spent two more turns apologising for the
+/// weather.
+final class UnrankedFillTests: XCTestCase {
+    /// A zero limit means an unmatched query gets only what was pinned.
+    func testZeroLimitSendsNothingUnranked() async {
+        let assembler = DefaultContextAssembler(unrankedFillLimit: 0)
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: Self.tools(),
+            state: AgentState(messages: [.user("zzzz qqqq")]),
+            budget: ContextBudget(total: 8192, maxTools: 6)
+        )
+        XCTAssertTrue(assembled.tools.isEmpty, "Nothing matched, so nothing is offered")
+    }
+
+    /// Pinned tools are not filler and survive regardless.
+    func testPinnedToolsSurviveAZeroLimit() async {
+        let assembler = DefaultContextAssembler(
+            pinnedToolNames: ["load_skill"],
+            unrankedFillLimit: 0
+        )
+        var tools = Self.tools()
+        tools.append(Self.tool("load_skill", "Load a named skill's instructions."))
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: tools,
+            state: AgentState(messages: [.user("zzzz qqqq")]),
+            budget: ContextBudget(total: 8192, maxTools: 6)
+        )
+        XCTAssertEqual(assembled.tools.map(\.name), ["load_skill"])
+    }
+
+    /// A small limit hedges without flooding.
+    func testSmallLimitCapsTheFiller() async {
+        let assembler = DefaultContextAssembler(unrankedFillLimit: 2)
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: Self.tools(),
+            state: AgentState(messages: [.user("zzzz qqqq")]),
+            budget: ContextBudget(total: 8192, maxTools: 6)
+        )
+        XCTAssertEqual(assembled.tools.count, 2)
+    }
+
+    /// The default is unchanged, so consumers that never opt in keep
+    /// the old hedge.
+    func testDefaultStillFillsToTheCap() async {
+        let assembler = DefaultContextAssembler()
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: Self.tools(),
+            state: AgentState(messages: [.user("zzzz qqqq")]),
+            budget: ContextBudget(total: 8192, maxTools: 6)
+        )
+        XCTAssertEqual(assembled.tools.count, 6)
+    }
+
+    /// A limit governs only the unranked path — a query that matches
+    /// still gets its matches.
+    func testRankedToolsAreUnaffected() async {
+        let assembler = DefaultContextAssembler(unrankedFillLimit: 0)
+        var tools = Self.tools()
+        tools.append(Self.tool("log_meal", "Record a meal the user ate."))
+
+        let assembled = await assembler.assemble(
+            systemPrompt: nil,
+            tools: tools,
+            state: AgentState(messages: [.user("record the meal I ate")]),
+            budget: ContextBudget(total: 8192, maxTools: 6)
+        )
+        XCTAssertEqual(assembled.tools.first?.name, "log_meal")
+    }
+
+    private static func tools() -> [AnyTool] {
+        (0 ..< 12).map { Self.tool("tool_\($0)", "Does specific job number \($0).") }
+    }
+
+    private static func tool(_ name: String, _ description: String) -> AnyTool {
+        AnyTool(
+            definition: ToolDefinition(
+                name: name,
+                description: description,
+                inputSchema: .object(properties: ["value": .string()], required: [])
+            ),
+            invoke: { _, _ in .null }
         )
     }
 }

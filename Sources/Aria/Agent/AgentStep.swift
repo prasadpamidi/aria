@@ -69,12 +69,10 @@ extension Agent {
 
     /// Render a `ToolExecutionResult` back into a string suitable for
     /// embedding in a `tool` message's content.
+    /// Provider-executed results take the same path as agent-executed
+    /// ones, so a failure reads identically however it was produced.
     static func renderResult(_ result: ToolExecutionResult) -> String {
-        guard let data = try? result.output.canonicalData(),
-              let string = String(data: data, encoding: .utf8) else {
-            return result.isError ? "(tool error)" : "(tool output)"
-        }
-        return string
+        ToolFailure.render(result)
     }
 
     private func buildProviderMessages(state: AgentState) -> [Message] {

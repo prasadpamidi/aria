@@ -330,3 +330,72 @@ final class HistorySummarizationMiddlewareTests: XCTestCase {
         )
     }
 }
+
+// MARK: - SizeTriggerTests
+
+/// Counting messages measures the wrong thing.
+///
+/// A thinking model puts hundreds of tokens of working-out into one
+/// assistant turn, so a handful of "recent" messages can fill most of a
+/// 4,096-token window while sitting far under any turn threshold. Seen
+/// in the field at 94% utilisation after five short exchanges, with
+/// compaction never firing.
+final class SizeTriggerTests: XCTestCase {
+    func testLargeHistoryCompactsBelowTheTurnThreshold() async throws {
+        let middleware = HistorySummarizationMiddleware(
+            triggerAfterTurns: 100,
+            keepRecentTurns: 2,
+            triggerAfterCharacters: 2000,
+            summarizer: { _ in "SUMMARY" }
+        )
+        let bulky = String(repeating: "deliberating ", count: 200)
+        let state = AgentState(messages: [
+            .user("one"), .assistant(bulky),
+            .user("two"), .assistant(bulky),
+        ])
+
+        let result = try await middleware.beforeStep(state)
+
+        XCTAssertTrue(
+            result.messages.contains { $0.role == .system && $0.textContent.contains("SUMMARY") },
+            "Four messages is far under the turn threshold, but the text is not"
+        )
+    }
+
+    /// The size trigger must not fire on ordinary short conversations.
+    func testSmallHistoryIsLeftAlone() async throws {
+        let middleware = HistorySummarizationMiddleware(
+            triggerAfterTurns: 100,
+            keepRecentTurns: 2,
+            triggerAfterCharacters: 2000,
+            summarizer: { _ in "SUMMARY" }
+        )
+        let state = AgentState(messages: [
+            .user("hello"), .assistant("hi"),
+            .user("thanks"), .assistant("welcome"),
+        ])
+
+        let result = try await middleware.beforeStep(state)
+
+        XCTAssertFalse(result.messages.contains { $0.textContent.contains("SUMMARY") })
+    }
+
+    /// Passing `nil` restores pure count-based behaviour.
+    func testSizeTriggerCanBeDisabled() async throws {
+        let middleware = HistorySummarizationMiddleware(
+            triggerAfterTurns: 100,
+            keepRecentTurns: 2,
+            triggerAfterCharacters: nil,
+            summarizer: { _ in "SUMMARY" }
+        )
+        let bulky = String(repeating: "deliberating ", count: 500)
+        let state = AgentState(messages: [
+            .user("one"), .assistant(bulky),
+            .user("two"), .assistant(bulky),
+        ])
+
+        let result = try await middleware.beforeStep(state)
+
+        XCTAssertFalse(result.messages.contains { $0.textContent.contains("SUMMARY") })
+    }
+}

@@ -493,6 +493,26 @@
                 toolDefinitions: toolsForModel
             )
             let lmInput = try await container.prepare(input: userInput)
+            // What the model actually reads, after the chat template.
+            //
+            // Everything upstream — the assembler's budget, the
+            // inspector's "tools sent" list — describes the request Aria
+            // *composed*. The template is what turns that into tokens,
+            // and it alone decides whether the tool list reaches the
+            // prompt: LFM2's folds tools into the system message, Qwen's
+            // emits a separate block, and a family whose flags are wrong
+            // renders none of it silently.
+            //
+            // Without this, "the model ignored a tool it was given" is
+            // unanswerable from a trace — nothing distinguishes a model
+            // that ignored its tools from one never shown them.
+            Self.logger.debug(
+                """
+                templated prompt model=\(self.modelCapabilities.id, privacy: .public) \
+                toolsPassed=\(toolsForModel.count) \
+                promptTokens=\(lmInput.text.tokens.size, privacy: .public)
+                """
+            )
             let generation = try await container.generate(
                 input: lmInput,
                 parameters: self.generationParameters
