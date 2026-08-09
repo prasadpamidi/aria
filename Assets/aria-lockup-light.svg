@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 906 256" role="img" aria-label="Aria">
+  <g transform="scale(0.5)">
+    <g fill="none" stroke="#0B0B0F">
+    <rect x="40" y="40" width="432" height="432" rx="112" stroke-width="24" opacity="0.38"/>
+    <rect x="122" y="122" width="268" height="268" rx="72" stroke-width="26" opacity="0.68"/>
+  </g>
+  <rect x="204" y="204" width="104" height="104" rx="32" fill="#0B0B0F"/>
+  </g>
+  <g transform="translate(312,-117)">
+    <g fill="none" stroke="#0B0B0F" stroke-width="34" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="100" cy="270" r="70"/><path d="M170 200 V340"/>
+    <path d="M234 200 V340"/><path d="M234 252 C234 216 262 200 296 200"/>
+    <path d="M360 200 V340"/>
+    <circle cx="494" cy="270" r="70"/><path d="M564 200 V340"/>
+  </g>
+  <circle cx="360" cy="152" r="19" fill="#0B0B0F"/>
+  </g>
+</svg>
