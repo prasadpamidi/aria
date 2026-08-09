@@ -54,6 +54,28 @@ public struct MCPClient: Sendable {
         self.credential = credential
         self.clientName = clientName
         self.clientVersion = clientVersion
+        self.transportFactory = nil
+    }
+
+    /// Test seam: supply the transport instead of building an
+    /// `HTTPClientTransport` from the endpoint.
+    ///
+    /// Without this the mapping code below — pagination draining,
+    /// content-block conversion, prompt argument flattening — can only
+    /// be exercised against a live third-party server, which is to say
+    /// never in CI.
+    init(
+        serverURL: URL,
+        credential: MCPCredential?,
+        clientName: String,
+        clientVersion: String,
+        transportFactory: @escaping @Sendable () -> any Transport
+    ) {
+        self.serverURL = serverURL
+        self.credential = credential
+        self.clientName = clientName
+        self.clientVersion = clientVersion
+        self.transportFactory = transportFactory
     }
 
     // MARK: Public
@@ -138,12 +160,97 @@ public struct MCPClient: Sendable {
         }
     }
 
+    /// Enumerate the server's resources, draining pagination.
+    ///
+    /// Distinct from tools: a tool is something the model *calls*, a
+    /// resource is content the host can read or render. MCP Apps
+    /// arrive here — a `ui://` resource with a
+    /// `text/html;profile=mcp-app` MIME type is an interactive surface
+    /// rather than data.
+    public func listResources() async throws -> [MCPResourceDescriptor] {
+        try await self.withConnectedClient { client in
+            var collected: [MCP.Resource] = []
+            var cursor: String?
+            repeat {
+                let (resources, next) = try await client.listResources(cursor: cursor)
+                collected.append(contentsOf: resources)
+                cursor = next
+            } while cursor != nil
+            return collected.map {
+                MCPResourceDescriptor(
+                    uri: $0.uri,
+                    name: $0.name,
+                    description: $0.description,
+                    mimeType: $0.mimeType,
+                    size: $0.size
+                )
+            }
+        }
+    }
+
+    /// Read one resource by URI.
+    ///
+    /// Returns every content block the server sends. A resource may be
+    /// text, base64 `blob`, or several parts — callers wanting the
+    /// markup of a UI resource want `firstHTMLResource`.
+    public func readResource(uri: String) async throws -> MCPCallResult {
+        try await self.withConnectedClient { client in
+            let contents = try await client.readResource(uri: uri)
+            return MCPCallResult(
+                content: contents.map { content in
+                    if let text = content.text {
+                        return .resource(MCPResourceContent(
+                            uri: content.uri,
+                            mimeType: content.mimeType,
+                            text: text,
+                            blob: nil
+                        ))
+                    }
+                    return .resource(MCPResourceContent(
+                        uri: content.uri,
+                        mimeType: content.mimeType,
+                        text: nil,
+                        blob: content.blob
+                    ))
+                },
+                isError: false
+            )
+        }
+    }
+
+    /// Enumerate the server's prompt templates, draining pagination.
+    public func listPrompts() async throws -> [MCPPromptDescriptor] {
+        try await self.withConnectedClient { client in
+            var collected: [MCP.Prompt] = []
+            var cursor: String?
+            repeat {
+                let (prompts, next) = try await client.listPrompts(cursor: cursor)
+                collected.append(contentsOf: prompts)
+                cursor = next
+            } while cursor != nil
+            return collected.map { prompt in
+                MCPPromptDescriptor(
+                    name: prompt.name,
+                    description: prompt.description,
+                    arguments: (prompt.arguments ?? []).map {
+                        MCPPromptDescriptor.Argument(
+                            name: $0.name,
+                            description: $0.description,
+                            required: $0.required ?? false
+                        )
+                    }
+                )
+            }
+        }
+    }
+
     // MARK: Private
 
     private let serverURL: URL
     private let credential: MCPCredential?
     private let clientName: String
     private let clientVersion: String
+    private let transportFactory: (@Sendable () -> any Transport)?
 
     private static func makeTransport(
         endpoint: URL,
@@ -315,6 +422,7 @@ public struct MCPClient: Sendable {
     ) async throws -> T {
         let endpoint = self.serverURL
         let credential = self.credential
+        let override = self.transportFactory
         do {
             return try await MCPSessionPool.shared.withClient(
                 key: MCPSessionKey(
@@ -323,7 +431,9 @@ public struct MCPClient: Sendable {
                     clientName: self.clientName,
                     clientVersion: self.clientVersion
                 ),
-                makeTransport: { Self.makeTransport(endpoint: endpoint, credential: credential) },
+                makeTransport: {
+                    override?() ?? Self.makeTransport(endpoint: endpoint, credential: credential)
+                },
                 body: body
             )
         } catch {

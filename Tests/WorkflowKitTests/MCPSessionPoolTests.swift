@@ -72,7 +72,11 @@ actor FakeMCPTransport: Transport {
         case "initialize":
             result = [
                 "protocolVersion": "2025-06-18",
-                "capabilities": ["tools": [:] as [String: Any]],
+                "capabilities": [
+                    "tools": [:] as [String: Any],
+                    "resources": [:] as [String: Any],
+                    "prompts": [:] as [String: Any],
+                ],
                 "serverInfo": ["name": "fake", "version": "1.0"],
             ]
         case "tools/list":
@@ -80,6 +84,36 @@ actor FakeMCPTransport: Transport {
                 "name": "echo",
                 "description": "Echo input.",
                 "inputSchema": ["type": "object"] as [String: Any],
+            ]]]
+        case "resources/list":
+            // Two pages, so pagination is actually exercised rather
+            // than assumed: a client that ignores `nextCursor` sees
+            // only half a server's resources.
+            let params = object["params"] as? [String: Any]
+            if params?["cursor"] as? String == "page2" {
+                result = ["resources": [[
+                    "uri": "file://data.csv", "name": "Data", "mimeType": "text/csv",
+                ]]]
+            } else {
+                result = [
+                    "resources": [[
+                        "uri": "ui://dashboard", "name": "Dashboard",
+                        "mimeType": "text/html;profile=mcp-app",
+                    ]],
+                    "nextCursor": "page2",
+                ]
+            }
+        case "resources/read":
+            result = ["contents": [[
+                "uri": "ui://dashboard",
+                "mimeType": "text/html;profile=mcp-app",
+                "text": "<h1>hi</h1>",
+            ]]]
+        case "prompts/list":
+            result = ["prompts": [[
+                "name": "summarise",
+                "description": "Summarise a document.",
+                "arguments": [["name": "uri", "description": "What to read", "required": true]],
             ]]]
         default:
             result = [:]
