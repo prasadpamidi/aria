@@ -327,6 +327,46 @@ public struct DefaultContextAssembler: ContextAssembler {
         return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Drop ranked tools that do not fit the token ceiling.
+    ///
+    /// `maxTools` bounds the *count* of tools; this bounds their
+    /// *cost*. Both are needed, and only the count was enforced on the
+    /// ranked path — the ceiling was consulted for the "everything
+    /// already fits" early exit and for filler, then skipped entirely
+    /// once ranking returned something. Six tools is a fine cap until
+    /// the six are MCP schemas: a connected weather server put 5,845
+    /// tokens into a 4,096-token window and the whole turn was
+    /// refused, with the budget reporting itself satisfied.
+    ///
+    /// Required tools are kept regardless. They are pinned or already
+    /// invoked this turn, and dropping one breaks the conversation
+    /// outright, where overshooting only risks a refusal that trimming
+    /// the rest may still avoid.
+    ///
+    /// Ranked tools are taken in order and the first that does not fit
+    /// stops the loop rather than being skipped over. Skipping to a
+    /// smaller lower-ranked tool would quietly prefer cheap tools to
+    /// relevant ones, which is the opposite of what ranking is for.
+    private static func fitting(
+        _ selected: [AnyTool],
+        required: [AnyTool],
+        ceiling: Int,
+        cost: (AnyTool) -> Int
+    ) -> [AnyTool] {
+        let requiredNames = Set(required.map(\.name))
+        var kept = required
+        var spent = required.reduce(0) { $0 + cost($1) }
+        for tool in selected where !requiredNames.contains(tool.name) {
+            let next = cost(tool)
+            guard spent + next <= ceiling else {
+                break
+            }
+            kept.append(tool)
+            spent += next
+        }
+        return kept
+    }
+
     /// Cost of the recalled-memory block, if the caller named it.
     private func memoryTokens(in messages: [Message]) -> Int {
         guard let prefix = memoryMessagePrefix else {
@@ -406,7 +446,12 @@ public struct DefaultContextAssembler: ContextAssembler {
         // and a half-empty context window is only a problem if the tool
         // the user needed is the part that's missing.
         guard selected.count == requiredTools.count else {
-            return selected
+            return Self.fitting(
+                selected,
+                required: requiredTools,
+                ceiling: ceiling,
+                cost: { self.tokenCounter.count(tool: $0.definition) }
+            )
         }
 
         // Nothing scored. How much to read into that depends on the
