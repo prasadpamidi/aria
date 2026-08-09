@@ -97,6 +97,26 @@ final class ToolBudgetCeilingTests: XCTestCase {
         XCTAssertLessThanOrEqual(cost, budget.toolTokenLimit)
     }
 
+    /// Survives every compaction level: many required properties with
+    /// long names, which no level is permitted to remove.
+    private static func incompressibleTool(named name: String) -> AnyTool {
+        var properties: [String: JSONSchema] = [:]
+        var required: [String] = []
+        for index in 0 ..< 220 {
+            let key = "detailed_configuration_parameter_number_\(index)_for_the_request"
+            properties[key] = .string(description: nil, enumValues: nil)
+            required.append(key)
+        }
+        return AnyTool(
+            definition: ToolDefinition(
+                name: name,
+                description: "Weather.",
+                inputSchema: .object(properties: properties, required: required)
+            ),
+            invoke: { _, _ in .object([:]) }
+        )
+    }
+
     /// Sized and shaped like a published MCP schema: a paragraph of
     /// description and several documented parameters.
     private static func mcpSizedTool(named name: String) -> AnyTool {
@@ -127,6 +147,46 @@ final class ToolBudgetCeilingTests: XCTestCase {
                 )
             ),
             invoke: { _, _ in .object([:]) }
+        )
+    }
+
+    /// The field regression: three MCP tools worth 4,533 tokens went
+    /// out against a 2,996-token budget, history collapsed to nothing
+    /// to make room, and the provider refused the request anyway.
+    ///
+    /// The share is breakable by design — sending no usable tool is
+    /// worse than overspending it. The *budget* is not.
+    func testToolsNeverExceedTheHardBudget() async throws {
+        // Incompressible on purpose: compaction may drop descriptions
+        // and optional properties, never required ones. A tool whose
+        // required surface alone busts the budget is the case the hard
+        // bound exists for.
+        let tools = (0 ..< 6).map { Self.incompressibleTool(named: "weather_mcp__tool_\($0)") }
+        let budget = ContextBudget(total: 4096, reservedForOutput: 768, maxTools: 6)
+        var state = AgentState()
+        state.messages = [.user("weather forecast for dublin please")]
+
+        let assembled = await DefaultContextAssembler(unrankedFillLimit: 0).assemble(
+            systemPrompt: "You are helpful.",
+            tools: tools,
+            state: state,
+            budget: budget
+        )
+
+        let counter = HeuristicTokenCounter()
+        let toolTokens = assembled.tools.reduce(0) { $0 + counter.count(tool: $1.definition) }
+        let messageTokens = assembled.messages.reduce(0) { $0 + counter.count(message: $1) }
+        XCTAssertLessThanOrEqual(
+            toolTokens + messageTokens,
+            budget.available,
+            "assembled \(toolTokens) tool + \(messageTokens) message tokens against \(budget.available)"
+        )
+        // And the user's turn survived, which is the point of the
+        // reservation — a request that cannot carry the question is not
+        // a smaller request, it is a broken one.
+        XCTAssertTrue(
+            assembled.messages.contains { $0.role == .user },
+            "the user message was dropped to make room for tools"
         )
     }
 

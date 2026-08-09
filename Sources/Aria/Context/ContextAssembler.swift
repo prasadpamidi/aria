@@ -115,10 +115,27 @@ public struct DefaultContextAssembler: ContextAssembler {
         state: AgentState,
         budget: ContextBudget
     ) async -> AssembledContext {
-        let (selectedTools, rankedNames) = await self.selectTools(
+        let (ranked, rankedNames) = await self.selectTools(
             from: tools,
             state: state,
             budget: budget
+        )
+        // Last line of defence: tools must leave room for the message
+        // they are meant to answer.
+        //
+        // `toolTokenLimit` is a *share* and is deliberately breakable —
+        // sending no usable tool is worse than overspending the share.
+        // `available` is not. Without a hard bound the two rules
+        // compose into the worst outcome: a run selected three MCP
+        // tools worth 4,533 tokens against a 1,198 share and a 2,996
+        // budget, history collapsed to nothing to make room, and the
+        // provider refused the request at 4,727 of 4,096 — so the turn
+        // failed anyway, having thrown away the conversation first.
+        let selectedTools = self.withinHardLimit(
+            ranked,
+            systemPrompt: systemPrompt,
+            budget: budget,
+            state: state
         )
 
         // Guidance rides with the tools that survived, so instructions
@@ -400,6 +417,35 @@ public struct DefaultContextAssembler: ContextAssembler {
         if kept.count == required.count,
            let best = selected.first(where: { !requiredNames.contains($0.name) }) {
             kept.append(best)
+        }
+        return kept
+    }
+
+    /// Drop tools until the request can physically fit, whatever the
+    /// share allowed.
+    ///
+    /// Tools are dropped from the end — lowest-ranked first — and the
+    /// prompt is recomposed each time, because guidance rides with the
+    /// tools that survived. The newest message is reserved for: a
+    /// request that cannot carry the user's turn is not a smaller
+    /// request, it is a broken one.
+    private func withinHardLimit(
+        _ selected: [AnyTool],
+        systemPrompt: String?,
+        budget: ContextBudget,
+        state: AgentState
+    ) -> [AnyTool] {
+        let newestTokens = state.messages.last
+            .map { self.tokenCounter.count(message: $0) } ?? 0
+        var kept = selected
+        while !kept.isEmpty {
+            let prompt = Self.compose(systemPrompt: systemPrompt, guidanceFrom: kept)
+            let promptTokens = prompt.map { self.tokenCounter.count(text: $0) } ?? 0
+            let toolTokens = kept.reduce(0) { $0 + self.tokenCounter.count(tool: $1.definition) }
+            if promptTokens + toolTokens + newestTokens <= budget.available {
+                return kept
+            }
+            kept.removeLast()
         }
         return kept
     }
