@@ -134,6 +134,49 @@
             )
         }
 
+        /// What floor should the *contextual* encoder use?
+        ///
+        /// 0.55 was swept against MLX bge-small. Cosine distributions
+        /// are a property of the model, and applying one model's floor
+        /// to another is how a ranker ends up matching everything: on
+        /// Apple contextual the field showed all four skills advertised
+        /// on every turn, including "Who am I?".
+        func testContextualSimilarityFloorSweep() async throws {
+            try XCTSkipUnless(
+                Self.assetEvalsEnabled,
+                "Needs an asset download; set ARIA_RUN_EVALS=1"
+            )
+            guard #available(iOS 17.0, macOS 14.0, *),
+                  let embedder = NLContextualEmbedder() else {
+                throw XCTSkip("NLContextualEmbedding unavailable")
+            }
+            do {
+                try await embedder.prepare()
+            } catch {
+                throw XCTSkip("assets unavailable: \(error)")
+            }
+
+            let eval = ToolSelectionEval(
+                corpus: ToolSelectionFixtures.corpus,
+                cases: ToolSelectionFixtures.cases
+            )
+            for floor in [0.55, 0.65, 0.75, 0.80, 0.85, 0.90] {
+                let fused = await eval.run(
+                    FusedToolSelector(selectors: [
+                        LexicalToolSelector(),
+                        EmbeddingToolSelector(
+                            embedder: embedder,
+                            minimumSimilarity: floor,
+                            fallback: nil
+                        ),
+                    ]),
+                    label: String(format: "contextual @ %.2f", floor),
+                    limit: 10
+                )
+                print(fused.summary().split(separator: "\n").first.map(String.init) ?? "")
+            }
+        }
+
         /// Does the stopword list earn its maintenance?
         ///
         /// It was grown twice on intuition, and intuition is what this

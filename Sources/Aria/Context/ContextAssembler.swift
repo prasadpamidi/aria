@@ -93,12 +93,16 @@ public struct DefaultContextAssembler: ContextAssembler {
         selector: any ToolSelector = LexicalToolSelector(),
         tokenCounter: any TokenCounter = HeuristicTokenCounter(),
         pinnedToolNames: Set<String> = [],
+        unrankedFillLimit: Int? = nil,
+        memoryMessagePrefix: String? = nil,
         onAllocation: (@Sendable (ContextAllocation) -> Void)? = nil,
         onAssembled: (@Sendable (AssembledContext) -> Void)? = nil
     ) {
         self.selector = selector
         self.tokenCounter = tokenCounter
         self.pinnedToolNames = pinnedToolNames
+        self.unrankedFillLimit = unrankedFillLimit
+        self.memoryMessagePrefix = memoryMessagePrefix
         self.onAllocation = onAllocation
         self.onAssembled = onAssembled
     }
@@ -136,7 +140,7 @@ public struct DefaultContextAssembler: ContextAssembler {
         // few very large recent results are beyond its reach entirely —
         // it trims the conversation down to nothing and still overflows.
         let (bounded, truncated) = self.boundToolResults(
-            state.messages,
+            Self.strippingPastReasoning(from: state.messages),
             limit: budget.toolResultTokenLimit
         )
         let history = self.windowMessages(bounded, limit: remaining)
@@ -147,11 +151,12 @@ public struct DefaultContextAssembler: ContextAssembler {
         }
         messages.append(contentsOf: history.messages)
 
+        let memoryTokens = self.memoryTokens(in: history.messages)
         let allocation = ContextAllocation(
             systemPromptTokens: promptTokens,
             toolTokens: toolTokens,
-            memoryTokens: 0,
-            historyTokens: history.tokens,
+            memoryTokens: memoryTokens,
+            historyTokens: max(0, history.tokens - memoryTokens),
             budgetAvailable: budget.available,
             toolsOffered: tools.count,
             toolsSelected: selectedTools.count,
@@ -183,6 +188,34 @@ public struct DefaultContextAssembler: ContextAssembler {
     private let selector: any ToolSelector
     private let tokenCounter: any TokenCounter
     private let pinnedToolNames: Set<String>
+
+    /// How many zero-scoring tools to send when ranking finds nothing.
+    ///
+    /// `nil` fills to the cap, which is right for a ranker that misses
+    /// often: "nothing scored" then means "the ranker had nothing to
+    /// say", and sending what fits is the only hedge available.
+    ///
+    /// It is wrong for a ranker that doesn't miss. Fused lexical +
+    /// embedding measured 100% recall on the field corpus, so an empty
+    /// ranking became evidence rather than noise — and overriding it
+    /// has a cost. Told "I live in Dublin, CA", a model was handed
+    /// `http_request`, `base64_codec`, `start_fast` and `log_water`,
+    /// none of which relate to anything, and answered by inventing a
+    /// call to a weather API. Two further turns were spent apologising
+    /// for the weather.
+    ///
+    /// A model with no tools says it cannot help. A model with six
+    /// irrelevant ones uses one.
+    private let unrankedFillLimit: Int?
+    /// Identifies the recalled-memory block so its cost is reported as
+    /// memory rather than history.
+    ///
+    /// `memoryTokens` was hardcoded to zero while `RAGMiddleware`
+    /// injected a system message that landed in the history total. The
+    /// breakdown therefore said memory cost nothing, on every turn,
+    /// which is worse than omitting it — a diagnostic that reports a
+    /// confident zero stops anyone looking.
+    private let memoryMessagePrefix: String?
     private let onAllocation: (@Sendable (ContextAllocation) -> Void)?
     private let onAssembled: (@Sendable (AssembledContext) -> Void)?
 
@@ -214,9 +247,22 @@ public struct DefaultContextAssembler: ContextAssembler {
     /// the result it produced becomes unresolvable and the model is
     /// left reading a reply to a call it can no longer see. Ranking is
     /// per-turn; availability has to be per-run.
+    /// Scoped to the current turn, which is what "per-run" meant.
+    ///
+    /// This used to scan the whole thread, so a tool called once was
+    /// pinned for the rest of the conversation — and pinned tools lead
+    /// the ranking, ahead of anything merely relevant. In the field a
+    /// hydration lookup on turn one made `get_hydration_today` the
+    /// first tool offered for "What about fasting status?" two turns
+    /// later, and it held one of six slots on every turn after.
+    ///
+    /// A result only needs its tool present while that result is still
+    /// being reasoned about, which ends when the user speaks again.
+    /// After that the tool is a candidate like any other.
     private static func invokedToolNames(in messages: [Message]) -> Set<String> {
+        let turnStart = messages.lastIndex { $0.role == .user }.map { $0 + 1 } ?? 0
         var names: Set<String> = []
-        for message in messages {
+        for message in messages[turnStart...] {
             for call in message.toolCalls {
                 names.insert(call.name)
             }
@@ -227,6 +273,68 @@ public struct DefaultContextAssembler: ContextAssembler {
     /// Latest user text, used as the ranking query.
     private static func latestUserText(in messages: [Message]) -> String {
         messages.last { $0.role == .user }?.textContent ?? ""
+    }
+
+    /// Drop reasoning blocks from earlier turns.
+    ///
+    /// A thinking model's `<think>…</think>` is working-out for the
+    /// turn that produced it, and chat templates discard it on the next
+    /// one — LFM2's strips every assistant block but the last unless
+    /// `keep_past_thinking` is set. Counting it anyway is worse than
+    /// wasteful: history is budgeted against it, so real messages get
+    /// dropped to make room for text the template then throws away.
+    ///
+    /// Observed on LFM2.5 Thinking: 1,980 tokens of history and four
+    /// messages dropped, on a conversation of five short exchanges.
+    ///
+    /// The current turn keeps its reasoning — the model is still
+    /// working inside it, and a step that loses its own scratchpad
+    /// starts over.
+    private static func strippingPastReasoning(from messages: [Message]) -> [Message] {
+        let turnStart = messages.lastIndex { $0.role == .user } ?? messages.count
+        return messages.enumerated().map { index, message in
+            guard index < turnStart, message.role == .assistant else {
+                return message
+            }
+            let stripped = Self.withoutReasoning(message.textContent)
+            guard stripped != message.textContent else {
+                return message
+            }
+            return .assistant(stripped, toolCalls: message.toolCalls)
+        }
+    }
+
+    /// Remove `<think>…</think>` spans, keeping everything outside them.
+    ///
+    /// Tolerates an unterminated opener: a stream cut mid-thought would
+    /// otherwise leave the whole remainder of the message in place,
+    /// which is exactly the oversized case this exists to prevent.
+    private static func withoutReasoning(_ text: String) -> String {
+        guard text.contains("<think>") else {
+            return text
+        }
+        var out = ""
+        var rest = Substring(text)
+        while let open = rest.range(of: "<think>") {
+            out += rest[rest.startIndex..<open.lowerBound]
+            guard let close = rest.range(of: "</think>", range: open.upperBound..<rest.endIndex) else {
+                rest = rest[rest.endIndex...]
+                break
+            }
+            rest = rest[close.upperBound...]
+        }
+        out += rest
+        return out.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Cost of the recalled-memory block, if the caller named it.
+    private func memoryTokens(in messages: [Message]) -> Int {
+        guard let prefix = memoryMessagePrefix else {
+            return 0
+        }
+        return messages
+            .filter { $0.role == .system && $0.textContent.hasPrefix(prefix) }
+            .reduce(0) { $0 + self.tokenCounter.count(message: $1) }
     }
 
     private func selectTools(
@@ -301,16 +409,18 @@ public struct DefaultContextAssembler: ContextAssembler {
             return selected
         }
 
-        // Nothing scored: the query shares no distinctive term with any
-        // description, which is a routine outcome for lexical matching
-        // ("what did I eat?" misses `log_meal`) and says nothing about
-        // relevance. Send what fits rather than amputating the surface
-        // to whatever was pinned.
+        // Nothing scored. How much to read into that depends on the
+        // ranker, so the caller decides — see `unrankedFillLimit`.
+        let fillCeiling = self.unrankedFillLimit ?? maxTools
+        guard fillCeiling > 0 else {
+            return selected
+        }
         var chosen = Set(selected.map(\.name))
         var spent = selected.reduce(0) { $0 + self.tokenCounter.count(tool: $1.definition) }
 
+        var filled = 0
         for tool in candidates where !chosen.contains(tool.name) {
-            guard selected.count < maxTools else {
+            guard selected.count < maxTools, filled < fillCeiling else {
                 break
             }
             let cost = self.tokenCounter.count(tool: tool.definition)
@@ -320,6 +430,7 @@ public struct DefaultContextAssembler: ContextAssembler {
             selected.append(tool)
             chosen.insert(tool.name)
             spent += cost
+            filled += 1
         }
 
         return selected
@@ -388,7 +499,9 @@ public struct DefaultContextAssembler: ContextAssembler {
         _ messages: [Message],
         limit: Int
     ) -> WindowedHistory {
-        let cost = { (message: Message) in self.tokenCounter.count(text: message.textContent) }
+        // Whole messages, not just their text: an assistant turn that
+        // only requests a tool has no body and is not free.
+        let cost = { (message: Message) in self.tokenCounter.count(message: message) }
         var total = messages.reduce(0) { $0 + cost($1) }
         guard total > limit else {
             return WindowedHistory(messages: messages, dropped: 0, tokens: total)

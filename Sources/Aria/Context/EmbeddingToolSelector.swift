@@ -51,7 +51,7 @@ public actor EmbeddingToolSelector: ToolSelector {
     ///     ability to rank at all.
     public init(
         embedder: any Embedder,
-        minimumSimilarity: Double = 0.25,
+        minimumSimilarity: Double = 0.55,
         fallback: (any ToolSelector)? = LexicalToolSelector()
     ) {
         self.embedder = embedder

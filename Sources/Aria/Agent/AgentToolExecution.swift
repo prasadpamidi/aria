@@ -131,12 +131,11 @@ extension Agent {
         return Double(components.seconds) + Double(components.attoseconds) * 1e-18
     }
 
+    /// A failed result carries `ToolFailure.guidance` with it, so the
+    /// model reads what a failure means at the moment it reads the
+    /// failure. See `ToolFailure`.
     private static func renderToolResult(_ result: ToolExecutionResult) -> String {
-        guard let data = try? result.output.canonicalData(),
-              let string = String(data: data, encoding: .utf8) else {
-            return result.isError ? "(tool error)" : "(tool output)"
-        }
-        return string
+        ToolFailure.render(result)
     }
 
     /// Run an operation with a deadline; throws `AgentError.timeout` if

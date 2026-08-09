@@ -25,22 +25,43 @@
     public struct GRDBVectorStore: VectorStore {
         // MARK: Lifecycle
 
-        public init(dbQueue: DatabaseQueue, dimensions: Int) {
+        /// - Parameter embedderIdentifier: Which embedder produced the
+        ///   vectors this store should read.
+        ///
+        ///   Dimension is not identity. Two different 384-wide models
+        ///   compare cleanly and rank confident nonsense; a 512-wide
+        ///   one returns nothing at all, silently, which is
+        ///   indistinguishable from an empty store. Passing the
+        ///   identifier makes a model change *visible* — and
+        ///   `reembed(with:)` makes it survivable.
+        ///
+        ///   Defaults to `""` so existing databases keep working: rows
+        ///   written before this existed carry the same empty value.
+        public init(
+            dbQueue: DatabaseQueue,
+            dimensions: Int,
+            embedderIdentifier: String = ""
+        ) {
             self.dbQueue = dbQueue
             self.dimensions = dimensions
+            self.embedderIdentifier = embedderIdentifier
         }
 
         // MARK: Public
 
         public let dimensions: Int
 
+        /// Identifier of the embedder whose vectors this store reads.
+        public let embedderIdentifier: String
+
         public func upsert(_ items: [VectorItem]) async throws {
             for item in items {
                 try self.validate(item.vector)
             }
+            let identifier = self.embedderIdentifier
             try await self.dbQueue.write { db in
                 for item in items {
-                    try Self.insertOrReplace(item: item, into: db)
+                    try Self.insertOrReplace(item: item, embedderId: identifier, into: db)
                 }
             }
         }
@@ -94,6 +115,61 @@
             return candidates
         }
 
+        /// Re-embed every row that a different embedder wrote.
+        ///
+        /// The alternative is silent data loss. Search matches on
+        /// embedder identity, so after a model change the old rows are
+        /// still there and simply never returned — memory looks empty
+        /// while remaining full, and nothing surfaces an error.
+        ///
+        /// Content is the source of truth; vectors are derived, so they
+        /// can be rebuilt. Returns how many rows were migrated so a
+        /// caller can report progress or log it.
+        ///
+        /// Idempotent: rows already carrying this store's identifier
+        /// are skipped, so calling it on every launch costs one query.
+        @discardableResult
+        public func reembed(with embedder: any Embedder, batchSize: Int = 32) async throws -> Int {
+            let identifier = self.embedderIdentifier
+            let stale = try await dbQueue.read { db in
+                try VectorItemRow.fetchAll(
+                    db,
+                    sql: "SELECT * FROM vector_items WHERE embedderId <> ?",
+                    arguments: [identifier]
+                )
+            }
+            guard !stale.isEmpty else {
+                return 0
+            }
+
+            var migrated = 0
+            for chunk in stride(from: 0, to: stale.count, by: max(1, batchSize)).map({ start in
+                Array(stale[start..<min(start + max(1, batchSize), stale.count)])
+            }) {
+                let vectors = try await embedder.embed(chunk.map(\.content))
+                guard vectors.count == chunk.count else {
+                    throw AgentError.providerFailed(
+                        "Embedder returned \(vectors.count) vectors for \(chunk.count) inputs",
+                        underlying: nil
+                    )
+                }
+                var items: [VectorItem] = []
+                for (row, vector) in zip(chunk, vectors) {
+                    var item = try row.decode()
+                    item = VectorItem(
+                        id: item.id,
+                        vector: vector,
+                        content: item.content,
+                        metadata: item.metadata
+                    )
+                    items.append(item)
+                }
+                try await self.upsert(items)
+                migrated += items.count
+            }
+            return migrated
+        }
+
         // MARK: Internal
 
         /// Cosine similarity over equally-sized vectors. Same algorithm
@@ -116,16 +192,21 @@
 
         private let dbQueue: DatabaseQueue
 
-        private static func insertOrReplace(item: VectorItem, into db: Database) throws {
-            let row = try VectorItemRow(item: item)
+        private static func insertOrReplace(
+            item: VectorItem,
+            embedderId: String,
+            into db: Database
+        ) throws {
+            let row = try VectorItemRow(item: item, embedderId: embedderId)
             try db.execute(
                 sql: """
                 INSERT OR REPLACE INTO vector_items
-                (id, dimensions, vector, content, metadataJSON)
-                VALUES (?, ?, ?, ?, ?)
+                (id, embedderId, dimensions, vector, content, metadataJSON)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 arguments: [
                     row.id,
+                    row.embedderId,
                     row.dimensions,
                     row.vector,
                     row.content,
@@ -149,11 +230,12 @@
         /// as a JSON blob; for the scale we target this is a non-issue.
         private func loadCandidates(filter: VectorFilter?) async throws -> [VectorItem] {
             let storeDimensions = self.dimensions
+            let identifier = self.embedderIdentifier
             return try await self.dbQueue.read { db in
                 let rows = try VectorItemRow.fetchAll(
                     db,
-                    sql: "SELECT * FROM vector_items WHERE dimensions = ?",
-                    arguments: [storeDimensions]
+                    sql: "SELECT * FROM vector_items WHERE dimensions = ? AND embedderId = ?",
+                    arguments: [storeDimensions, identifier]
                 )
                 let items = try rows.map { try $0.decode() }
                 guard let filter else {
@@ -169,10 +251,11 @@
     private struct VectorItemRow: Codable, FetchableRecord {
         // MARK: Lifecycle
 
-        init(item: VectorItem) throws {
+        init(item: VectorItem, embedderId: String) throws {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
             self.id = item.id
+            self.embedderId = embedderId
             self.dimensions = item.vector.count
             self.vector = Self.bytes(from: item.vector)
             self.content = item.content
@@ -185,6 +268,7 @@
         // MARK: Internal
 
         let id: String
+        let embedderId: String
         let dimensions: Int
         let vector: Data
         let content: String

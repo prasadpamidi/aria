@@ -41,10 +41,16 @@ struct SkillSelectionTests {
         #expect(!block.contains("Markdown formatting guide"))
     }
 
-    /// Only rank under pressure. A catalogue that already fits has
-    /// nothing to gain from ranking and everything to lose — a selector
-    /// matching two of three would hide the third for free.
-    @Test func smallCatalogueIsAdvertisedWhole() async throws {
+    /// A small catalogue is still ranked.
+    ///
+    /// The first version copied the assembler's "only rank under
+    /// pressure" rule, which disabled skill ranking for any catalogue
+    /// smaller than the limit — and a five-skill device asked about
+    /// water intake was duly offered *Email style guide*, and loaded
+    /// it. An extra tool costs prompt tokens; an extra skill costs the
+    /// chance of a wasted round-trip, so relevance pays for itself at
+    /// any catalogue size.
+    @Test func smallCatalogueIsStillRanked() async throws {
         let provider = try Self.provider([
             ("Body composition", "Interpreting weight trends."),
             ("Email style guide", "Tone for cold outreach."),
@@ -59,15 +65,17 @@ struct SkillSelectionTests {
         )
 
         #expect(block.contains("Body composition"))
-        #expect(block.contains("Email style guide"))
-        #expect(block.contains("Recipe writing"))
+        #expect(!block.contains("Email style guide"), "Irrelevant even when there is room")
     }
 
-    /// An empty ranking means the ranker found no signal, not that
-    /// nothing is relevant — the same reading the context assembler
-    /// gives it. Hiding the catalogue on an unscoreable query would
-    /// leave the model unable to load a skill it might need.
-    @Test func unrankableQueryStillAdvertisesSkills() async throws {
+    /// Nothing matched, so nothing is advertised — the opposite of the
+    /// tool path, deliberately.
+    ///
+    /// A turn with no tools cannot act; a turn with no skills is fine.
+    /// Falling back to the whole catalogue is what put *Summarization
+    /// rubric* in front of a question about water intake, and the model
+    /// loaded it before doing any real work.
+    @Test func unmatchedQueryAdvertisesNoSkills() async throws {
         let provider = try Self.provider([
             ("Body composition", "Interpreting weight trends."),
             ("Email style guide", "Tone for cold outreach."),
@@ -82,8 +90,8 @@ struct SkillSelectionTests {
             limit: 2
         )
 
-        #expect(block.contains("Skills (load on demand)"))
-        #expect(block.contains("Body composition"))
+        #expect(!block.contains("Skills (load on demand)"))
+        #expect(block.isEmpty)
     }
 
     // MARK: - Inline bodies

@@ -53,6 +53,20 @@ public struct HistorySummarizationMiddleware: AgentMiddleware {
     ///   - keepRecentTurns: How many of the most recent non-system
     ///     messages to keep verbatim (not summarized). Anything older
     ///     gets compressed.
+    ///   - triggerAfterCharacters: Fires when the non-system history
+    ///     exceeds this many characters, regardless of message count.
+    ///     `nil` disables the size trigger.
+    ///
+    ///     Counting messages alone measures the wrong thing. A thinking
+    ///     model puts hundreds of tokens of working-out into a single
+    ///     assistant turn, so six "recent" messages can fill most of a
+    ///     4,096-token window while sitting comfortably under any turn
+    ///     threshold — observed as 94% utilisation after five short
+    ///     exchanges, with compaction never firing.
+    ///
+    ///     Characters rather than tokens because this layer has no
+    ///     `TokenCounter`; the trigger only needs to be roughly right,
+    ///     and the assembler enforces the real budget downstream.
     ///   - summarizer: Async function the middleware calls with the
     ///     older non-system slice, returns the summary text that
     ///     becomes the new `.system` message. Errors are swallowed
@@ -60,10 +74,12 @@ public struct HistorySummarizationMiddleware: AgentMiddleware {
     public init(
         triggerAfterTurns: Int,
         keepRecentTurns: Int,
+        triggerAfterCharacters: Int? = 6000,
         summarizer: @escaping @Sendable ([Message]) async throws -> String
     ) {
         self.triggerAfterTurns = triggerAfterTurns
         self.keepRecentTurns = keepRecentTurns
+        self.triggerAfterCharacters = triggerAfterCharacters
         self.summarizer = summarizer
         self.cache = SummaryCache()
     }
@@ -85,7 +101,13 @@ public struct HistorySummarizationMiddleware: AgentMiddleware {
         // Trigger gate: strictly more non-system messages than the
         // threshold, AND there's an actual older slice to summarize
         // after carving out `keepRecentTurns`.
-        guard nonSystem.count > self.triggerAfterTurns,
+        // Either trigger fires: too many turns, or too much text. The
+        // second exists because the first cannot see size, and size is
+        // what actually overflows a window.
+        let characters = nonSystem.reduce(0) { $0 + $1.textContent.count }
+        let overCount = nonSystem.count > self.triggerAfterTurns
+        let overSize = self.triggerAfterCharacters.map { characters > $0 } ?? false
+        guard overCount || overSize,
               nonSystem.count > self.keepRecentTurns else {
             return state
         }
@@ -130,6 +152,7 @@ public struct HistorySummarizationMiddleware: AgentMiddleware {
 
     private let triggerAfterTurns: Int
     private let keepRecentTurns: Int
+    private let triggerAfterCharacters: Int?
     private let summarizer: @Sendable ([Message]) async throws -> String
     private let cache: SummaryCache
 

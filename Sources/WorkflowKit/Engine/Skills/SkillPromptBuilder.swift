@@ -130,13 +130,24 @@ public enum SkillPromptBuilder {
         selector: any ToolSelector,
         limit: Int
     ) async -> [Skill] {
-        // Only rank under pressure, matching `DefaultContextAssembler`.
-        // A catalogue that already fits has nothing to gain from
-        // ranking and everything to lose: a selector that matches two
-        // of three skills would advertise two, hiding a skill that
-        // cost nothing to list.
-        guard skills.count > limit else {
-            return skills
+        // Rank whenever there is a query to rank against.
+        //
+        // This deliberately does *not* copy the assembler's
+        // "only under pressure" rule, and the first version of this
+        // function did — which disabled skill ranking entirely for any
+        // catalogue smaller than `limit`. Asked how much water they
+        // drank, an agent with five skills was still offered all five
+        // and loaded *Email style guide*.
+        //
+        // Tools and skills have different cost shapes. An extra tool
+        // costs its schema in the prompt. An extra *skill* costs the
+        // chance the model loads it — a whole round-trip and a
+        // body-sized result — which is why the pressure that matters
+        // here is not how much room is left but how little the skill
+        // has to do with the request. The doc comment on this file said
+        // exactly that before the code disagreed with it.
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return Array(skills.prefix(limit))
         }
         let definitions = skills.map { skill in
             ToolDefinition(
@@ -146,8 +157,22 @@ public enum SkillPromptBuilder {
             )
         }
         let ranked = await selector.select(from: definitions, query: query, limit: limit)
+        // Nothing matched: advertise nothing.
+        //
+        // This is the opposite of what the tool path does, and the
+        // asymmetry is the point. A turn with no tools cannot act, so
+        // an unranked query there means "send what fits". A turn with
+        // no skills is *fine* — skills are optional enhancements, and
+        // the model answers perfectly well without one.
+        //
+        // Falling back to the whole catalogue is what put *Summarization
+        // rubric* and *Markdown formatting guide* in front of a question
+        // about water intake: nothing matched, so everything shipped,
+        // and the model dutifully loaded two of them before doing any
+        // real work. On this path an unmatched catalogue should cost
+        // nothing rather than everything.
         guard !ranked.isEmpty else {
-            return Array(skills.prefix(limit))
+            return []
         }
         let byName = Dictionary(skills.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
         return ranked.compactMap { byName[$0.name] }

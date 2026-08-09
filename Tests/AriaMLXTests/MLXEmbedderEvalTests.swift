@@ -89,6 +89,59 @@
             XCTAssertGreaterThan(embedding.hitRate, 0, "A loaded encoder must rank something")
         }
 
+        /// What similarity floor should the encoder use?
+        ///
+        /// `EmbeddingToolSelector` defaulted to 0.25, chosen when the
+        /// only metrics were recall and top-1 — neither of which
+        /// notices noise. The field showed the cost: asked "what's the
+        /// current time", the fused ranker sent `timezone_math`,
+        /// `calculator`, `get_weather` and `get_fasting_status`
+        /// alongside `current_time`, and advertised all four skills.
+        /// Normalised cosine between unrelated short English texts sits
+        /// comfortably above 0.25, so the floor rejected almost
+        /// nothing.
+        ///
+        /// Sweep it, and take the highest floor that keeps recall.
+        func testSimilarityFloorSweep() async throws {
+            try XCTSkipUnless(
+                Self.assetEvalsEnabled,
+                "Downloads bge-small; set ARIA_RUN_EVALS=1"
+            )
+            let embedder = MLXEmbedder(model: .bgeSmall)
+            do {
+                try await embedder.prepare()
+            } catch {
+                throw XCTSkip("Could not load bge-small: \(error)")
+            }
+
+            let eval = ToolSelectionFixtures.eval
+            for floor in [0.25, 0.40, 0.50, 0.55, 0.60, 0.65, 0.70] {
+                let alone = await eval.run(
+                    EmbeddingToolSelector(
+                        embedder: embedder,
+                        minimumSimilarity: floor,
+                        fallback: nil
+                    ),
+                    label: String(format: "bge-small @ %.2f", floor),
+                    limit: 10
+                )
+                let fused = await eval.run(
+                    FusedToolSelector(selectors: [
+                        LexicalToolSelector(),
+                        EmbeddingToolSelector(
+                            embedder: embedder,
+                            minimumSimilarity: floor,
+                            fallback: nil
+                        ),
+                    ]),
+                    label: String(format: "  fused @ %.2f", floor),
+                    limit: 10
+                )
+                print(alone.summary().split(separator: "\n").first.map(String.init) ?? "")
+                print(fused.summary().split(separator: "\n").first.map(String.init) ?? "")
+            }
+        }
+
         /// Vectors must be usable as vectors: fixed width, L2-normalised,
         /// and actually distinguishing related text from unrelated.
         ///

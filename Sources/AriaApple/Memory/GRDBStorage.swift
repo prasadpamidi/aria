@@ -34,6 +34,10 @@
 
         // MARK: Public
 
+        /// Exposed so vector stores (and their migrations) can share the
+        /// same connection and schema the app migrates.
+        public let dbQueue: DatabaseQueue
+
         /// A `ChatHistory` writing to this storage.
         public var chatHistory: GRDBChatHistory {
             GRDBChatHistory(dbQueue: self.dbQueue)
@@ -48,13 +52,19 @@
         /// dimensionality of the embedder you intend to use; one storage
         /// can host vectors at multiple dimensionalities — items with
         /// the wrong dimension count are filtered out on read.
-        public func vectorStore(dimensions: Int) -> GRDBVectorStore {
-            GRDBVectorStore(dbQueue: self.dbQueue, dimensions: dimensions)
+        /// - Parameter embedderIdentifier: Which embedder's vectors
+        ///   this store should read. Passing it is what makes a model
+        ///   change visible instead of silently emptying memory.
+        public func vectorStore(
+            dimensions: Int,
+            embedderIdentifier: String = ""
+        ) -> GRDBVectorStore {
+            GRDBVectorStore(
+                dbQueue: self.dbQueue,
+                dimensions: dimensions,
+                embedderIdentifier: embedderIdentifier
+            )
         }
-
-        // MARK: Internal
-
-        let dbQueue: DatabaseQueue
 
         // MARK: Private
 
@@ -62,6 +72,7 @@
             var migrator = DatabaseMigrator()
             migrator.registerMigration("v1.tables", migrate: Self.migrateV1Tables(_:))
             migrator.registerMigration("v2.vectors", migrate: Self.migrateV2Vectors(_:))
+            migrator.registerMigration("v3.embedderIdentity", migrate: Self.migrateV3EmbedderIdentity(_:))
             return migrator
         }()
 
@@ -103,6 +114,25 @@
             try db.create(
                 indexOn: "checkpoints",
                 columns: ["threadId", "createdAt"]
+            )
+        }
+
+        /// Record which embedder produced each vector.
+        ///
+        /// Search matched on `dimensions` alone, which is not identity:
+        /// two different 384-wide models compare cleanly and return
+        /// confident nonsense, and swapping to a 512-wide one returns
+        /// nothing at all — silently, with no error, indistinguishable
+        /// from an empty store. Existing rows get an empty identifier,
+        /// which no live embedder will claim, so they are re-embedded
+        /// rather than trusted.
+        private static func migrateV3EmbedderIdentity(_ db: Database) throws {
+            try db.alter(table: "vector_items") { table in
+                table.add(column: "embedderId", .text).notNull().defaults(to: "")
+            }
+            try db.create(
+                indexOn: "vector_items",
+                columns: ["embedderId", "dimensions"]
             )
         }
 

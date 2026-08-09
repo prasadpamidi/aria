@@ -2,6 +2,9 @@
     import Aria
     import Foundation
     import FoundationModels
+    import os
+
+    private let fmLog = Logger(subsystem: "com.aria.apple", category: "foundationmodels")
 
     // MARK: - FoundationModelsProvider
 
@@ -58,6 +61,8 @@
 
         // MARK: Internal
 
+        static let maximumToolNameLength = 64
+
         // Read by extensions in sibling files (e.g.
         // `FoundationModelsStructured.swift`).
         let defaultInstructions: String?
@@ -111,6 +116,45 @@
                 entries.append(contentsOf: self.entries(for: message, toolNames: toolNameByCallId))
             }
             return Transcript(entries: entries)
+        }
+
+        /// Partition tools into those FoundationModels will accept and
+        /// human-readable reasons for the rest.
+        ///
+        /// Deliberately conservative about names: identifiers that are
+        /// ASCII letters, digits and underscores are what every
+        /// provider agrees on, and a runtime-named tool has no author
+        /// to catch a bad one at compile time.
+        static func registrable(
+            _ tools: [any FoundationModels.Tool]
+        ) -> (accepted: [any FoundationModels.Tool], rejected: [String]) {
+            var accepted: [any FoundationModels.Tool] = []
+            var rejected: [String] = []
+            var seen: Set<String> = []
+            for tool in tools {
+                let name = tool.name
+                if name.isEmpty {
+                    rejected.append("(empty name)")
+                    continue
+                }
+                if name.count > Self.maximumToolNameLength {
+                    rejected.append("\(name.prefix(40))… — name is \(name.count) characters")
+                    continue
+                }
+                let valid = name.allSatisfy { character in
+                    character.isASCII && (character.isLetter || character.isNumber || character == "_")
+                }
+                if !valid {
+                    rejected.append("\(name) — name has characters outside [A-Za-z0-9_]")
+                    continue
+                }
+                if !seen.insert(name).inserted {
+                    rejected.append("\(name) — duplicate name")
+                    continue
+                }
+                accepted.append(tool)
+            }
+            return (accepted, rejected)
         }
 
         static func checkAvailability() throws {
@@ -213,14 +257,34 @@
                 let selected = Set(executableTools.map(\.name))
                 fmTools = allTools.filter { selected.contains($0.name) }
             }
-            let toolDefinitions = fmTools.map { Transcript.ToolDefinition(tool: $0) }
+            // Drop tools FoundationModels cannot register, rather than
+            // letting one of them take the turn down.
+            //
+            // `LanguageModelSession(tools:)` fails as a whole if any
+            // tool is malformed — duplicate names above all — and the
+            // failure surfaces as an opaque `tokengeneration Code=10`
+            // during prefill, with no tokens, no tool calls, and
+            // nothing naming the offender. Runtime-named tools make
+            // that reachable: workflow tools derive their name by
+            // snake-casing a user-entered title, so two workflows
+            // called "Morning Brief" and "morning brief!" collide, and
+            // a title with an accent produces a non-ASCII identifier.
+            //
+            // A dropped tool costs one capability for one turn. An
+            // unregistrable session costs the turn, and gives nobody a
+            // way to find out why.
+            let (registrableTools, rejected) = Self.registrable(fmTools)
+            for reason in rejected {
+                fmLog.error("tool not offered to FoundationModels: \(reason, privacy: .public)")
+            }
+            let toolDefinitions = registrableTools.map { Transcript.ToolDefinition(tool: $0) }
             let transcript = Self.buildTranscript(
                 history: history,
                 defaultInstructions: self.defaultInstructions,
                 toolDefinitions: toolDefinitions
             )
             let session = LanguageModelSession(
-                tools: fmTools,
+                tools: registrableTools,
                 transcript: transcript
             )
 
