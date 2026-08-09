@@ -35,6 +35,36 @@ final class ToolBudgetCeilingTests: XCTestCase {
         )
     }
 
+    /// The regression from the field: ranking chose the right tool and
+    /// the share admitted none of them, leaving a turn that could only
+    /// answer from imagination.
+    ///
+    /// A single MCP schema on a real server runs to roughly a thousand
+    /// tokens, which is over the share once a pinned tool has taken its
+    /// cut. Respecting the share exactly is right when it costs a
+    /// fourth tool and wrong when it costs the only one.
+    func testTopRankedToolSurvivesEvenWhenItBustsTheShare() async throws {
+        let huge = Self.tool(named: "weather_summary", descriptionLength: 6000)
+        let pinned = Self.tool(named: "load_skill", descriptionLength: 40)
+        let assembler = DefaultContextAssembler(
+            pinnedToolNames: ["load_skill"],
+            unrankedFillLimit: 0
+        )
+        var state = AgentState()
+        state.messages = [.user("weather summary please")]
+
+        let assembled = await assembler.assemble(
+            systemPrompt: "You are helpful.",
+            tools: [pinned, huge],
+            state: state,
+            budget: ContextBudget(total: 4096, reservedForOutput: 768, maxTools: 6)
+        )
+        XCTAssertTrue(
+            assembled.tools.contains { $0.name == "weather_summary" },
+            "the only tool that could answer was trimmed away: \(assembled.tools.map(\.name))"
+        )
+    }
+
     /// Small tools are unaffected — the ceiling must not become a cap
     /// that starves ordinary surfaces.
     func testSmallToolSurfacesAreNotTrimmed() async throws {

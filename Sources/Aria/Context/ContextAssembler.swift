@@ -368,6 +368,30 @@ public struct DefaultContextAssembler: ContextAssembler {
             kept.append(tool)
             spent += next
         }
+
+        // If the share admitted nothing, admit the best one anyway.
+        //
+        // `ceiling` is a *share* of the budget — 40% by default — not
+        // the window. Honouring it strictly is right when it costs a
+        // fourth tool and wrong when it costs the only one: a turn with
+        // no actionable tool cannot do the thing it was asked to do,
+        // and no amount of budget discipline redeems that.
+        //
+        // Observed: a weather question ranked `get_weather_summary`
+        // second out of six, and every MCP schema on that server runs
+        // to roughly a thousand tokens — over the 1,080 left after the
+        // pinned tool. The trim was correct by its own rule and
+        // returned a request that could only answer from imagination,
+        // which is exactly what the model then did.
+        //
+        // The one admitted here is the top-ranked, not the smallest
+        // that fits. Preferring a cheap tool to a relevant one inverts
+        // ranking, and this is a last resort rather than a second
+        // policy.
+        if kept.count == required.count,
+           let best = selected.first(where: { !requiredNames.contains($0.name) }) {
+            kept.append(best)
+        }
         return kept
     }
 
