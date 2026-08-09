@@ -1,4 +1,9 @@
-# Aria
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="Assets/aria-lockup-dark.svg">
+    <img src="Assets/aria-lockup-light.svg" alt="Aria" height="64">
+  </picture>
+</p>
 
 [![CI](https://github.com/prasadpamidi/aria/actions/workflows/ci.yml/badge.svg)](https://github.com/prasadpamidi/aria/actions/workflows/ci.yml)
 [![Swift](https://img.shields.io/badge/Swift-6.1+-F05138?logo=swift&logoColor=white)](https://swift.org)

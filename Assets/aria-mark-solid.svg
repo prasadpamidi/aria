@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Aria">
+  <g fill="none" stroke="currentColor">
+    <rect x="40" y="40" width="432" height="432" rx="112" stroke-width="24" opacity="1"/>
+    <rect x="122" y="122" width="268" height="268" rx="72" stroke-width="26" opacity="1"/>
+  </g>
+  <rect x="204" y="204" width="104" height="104" rx="32" fill="currentColor"/>
+</svg>
