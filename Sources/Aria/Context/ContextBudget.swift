@@ -152,6 +152,7 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
         toolsOffered: Int = 0,
         toolsSelected: Int = 0,
         selectedToolNames: [String] = [],
+        offeredToolNames: [String] = [],
         messagesDropped: Int = 0,
         memoriesDropped: Int = 0,
         toolResultsTruncated: Int = 0
@@ -164,6 +165,7 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
         self.toolsOffered = toolsOffered
         self.toolsSelected = toolsSelected
         self.selectedToolNames = selectedToolNames
+        self.offeredToolNames = offeredToolNames
         self.messagesDropped = messagesDropped
         self.memoriesDropped = memoriesDropped
         self.toolResultsTruncated = toolResultsTruncated
@@ -192,6 +194,16 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
     /// is "was the tool I expected even offered?", and only the list
     /// answers it.
     public let selectedToolNames: [String]
+    /// Every tool the selector could have chosen from.
+    ///
+    /// `toolsOffered` was a count, which is enough to notice a surprise
+    /// and never enough to explain one. Asked for a weather summary
+    /// with a weather server connected, a run sent exactly one tool
+    /// (`load_skill`) out of twenty-eight — and the count could not
+    /// distinguish "the ranker buried the weather tools" from "the
+    /// weather tools were never candidates", which have nothing in
+    /// common except the symptom.
+    public let offeredToolNames: [String]
 
     /// History messages dropped to fit.
     public let messagesDropped: Int

@@ -161,6 +161,7 @@ public struct DefaultContextAssembler: ContextAssembler {
             toolsOffered: tools.count,
             toolsSelected: selectedTools.count,
             selectedToolNames: selectedTools.map(\.name),
+            offeredToolNames: tools.map(\.name),
             messagesDropped: history.dropped,
             memoriesDropped: 0,
             toolResultsTruncated: truncated
