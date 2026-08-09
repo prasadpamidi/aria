@@ -8,10 +8,16 @@ import MCP
 // MARK: - MCPClient
 
 /// MCP (Model Context Protocol) client bound to a single server
-/// endpoint. One instance is constructed per call site; the workflow
-/// compiler instantiates it per-step rather than pooling, which keeps
-/// the engine stateless and matches MCP's session-per-call model for
-/// read-mostly tool invocations.
+/// endpoint. Instances stay cheap to construct — the value is a handle,
+/// and the underlying connection lives in `MCPSessionPool` keyed by
+/// endpoint + credential, so constructing one per call site costs
+/// nothing and reuses the live session.
+///
+/// It previously connected and ran a full `initialize` handshake per
+/// call, on the stated grounds that this "matches MCP's session-per-call
+/// model". MCP has no such model — it is a stateful session protocol,
+/// and Streamable HTTP carries an `Mcp-Session-Id` across the session.
+/// See `MCPSessionPool` for what that cost.
 ///
 /// Backed by the official `modelcontextprotocol/swift-sdk`
 /// (`HTTPClientTransport` over Streamable HTTP). We hand-rolled this
@@ -33,10 +39,15 @@ import MCP
 public struct MCPClient: Sendable {
     // MARK: Lifecycle
 
+    /// - Parameter clientName: How this app introduces itself in the
+    ///   MCP handshake. Defaults to the host bundle's name rather than a
+    ///   literal, which is how every Niora request came to identify
+    ///   itself as "Avyra" — the default was hardcoded in a shared
+    ///   package and no call site overrode it.
     public init(
         serverURL: URL,
         credential: MCPCredential? = nil,
-        clientName: String = "Avyra",
+        clientName: String = MCPClient.defaultClientName,
         clientVersion: String = "1.0"
     ) {
         self.serverURL = serverURL
@@ -46,6 +57,18 @@ public struct MCPClient: Sendable {
     }
 
     // MARK: Public
+
+    /// The host app's name, or a neutral fallback off-app (tests, CLI).
+    public static let defaultClientName: String = {
+        let keys = ["CFBundleDisplayName", "CFBundleName"]
+        for key in keys {
+            if let name = Bundle.main.object(forInfoDictionaryKey: key) as? String,
+               !name.isEmpty {
+                return name
+            }
+        }
+        return "aria-mcp-client"
+    }()
 
     /// Invoke `name` with the supplied arguments and return the
     /// concatenated text-content blocks — the canonical textual tool
@@ -262,26 +285,48 @@ public struct MCPClient: Sendable {
         return MCPError.networkFailure(error.localizedDescription)
     }
 
-    /// Stand up a fresh SDK client + transport, run the
-    /// initialize handshake, hand the connected client to `body`, then
-    /// tear everything down — on both the success and failure paths so
-    /// the transport's resources don't leak. SDK errors are normalised
-    /// into our `MCPError` so callers see one error taxonomy.
+    /// Distinguishes credentials without putting secrets in a
+    /// dictionary key. Collisions only cost a needless reconnect.
+    private static func fingerprint(_ credential: MCPCredential?) -> Int {
+        var hasher = Hasher()
+        switch credential {
+        case .none:
+            hasher.combine(0)
+        case let .bearer(token):
+            hasher.combine(1)
+            hasher.combine(token)
+        case let .basic(username, password):
+            hasher.combine(2)
+            hasher.combine(username)
+            hasher.combine(password)
+        }
+        return hasher.finalize()
+    }
+
+    /// Run `body` against a pooled, connected client. SDK errors are
+    /// normalised into our `MCPError` so callers see one taxonomy
+    /// regardless of whether the failure came from our code or the SDK.
+    ///
+    /// The session is *not* torn down afterwards — that is the point.
+    /// `MCPSessionPool` owns its lifetime, reuses it for the next call,
+    /// and evicts it once idle.
     private func withConnectedClient<T: Sendable>(
-        _ body: (MCP.Client) async throws -> T
+        _ body: @Sendable @escaping (MCP.Client) async throws -> T
     ) async throws -> T {
-        let client = MCP.Client(name: self.clientName, version: self.clientVersion)
-        let transport = Self.makeTransport(
-            endpoint: self.serverURL,
-            credential: self.credential
-        )
+        let endpoint = self.serverURL
+        let credential = self.credential
         do {
-            _ = try await client.connect(transport: transport)
-            let result = try await body(client)
-            await client.disconnect()
-            return result
+            return try await MCPSessionPool.shared.withClient(
+                key: MCPSessionKey(
+                    endpoint: endpoint,
+                    credentialFingerprint: Self.fingerprint(credential),
+                    clientName: self.clientName,
+                    clientVersion: self.clientVersion
+                ),
+                makeTransport: { Self.makeTransport(endpoint: endpoint, credential: credential) },
+                body: body
+            )
         } catch {
-            await client.disconnect()
             throw Self.mapError(error)
         }
     }
