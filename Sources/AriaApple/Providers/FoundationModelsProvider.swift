@@ -47,8 +47,13 @@
         ) -> AsyncThrowingStream<ProviderEvent, any Error> {
             // No `AnyTool`s available on this overload — the agent layer
             // calls `stream(messages:executableTools:options:)` instead
-            // when tools should be executed. This path runs text-only.
-            self.streamCore(messages: messages, executableTools: [])
+            // when tools should be executed. This path has no selection
+            // to honour, so every registered tool is offered.
+            self.streamCore(
+                messages: messages,
+                executableTools: [],
+                honourSelection: false
+            )
         }
 
         public func stream(
@@ -56,7 +61,19 @@
             executableTools: [AnyTool],
             options _: Aria.GenerationOptions
         ) -> AsyncThrowingStream<ProviderEvent, any Error> {
-            self.streamCore(messages: messages, executableTools: executableTools)
+            // A selection arrived, so an empty one means *none* — not
+            // "no preference". Conflating the two let a deliberate
+            // "send no tools" decision reach the model as "send all
+            // twelve": `DefaultContextAssembler(unrankedFillLimit: 0)`
+            // selected nothing for a statement needing no tool, and the
+            // request went out at 4,091 tokens against a 4,096 ceiling
+            // and was refused. Two features written a week apart, each
+            // correct alone.
+            self.streamCore(
+                messages: messages,
+                executableTools: executableTools,
+                honourSelection: true
+            )
         }
 
         // MARK: Internal
@@ -182,13 +199,15 @@
 
         private func streamCore(
             messages: [Message],
-            executableTools: [AnyTool]
+            executableTools: [AnyTool],
+            honourSelection: Bool
         ) -> AsyncThrowingStream<ProviderEvent, any Error> {
             AsyncThrowingStream { continuation in
                 let task = Task {
                     await self.runHandlingErrors(
                         messages: messages,
                         executableTools: executableTools,
+                        honourSelection: honourSelection,
                         continuation: continuation
                     )
                 }
@@ -199,12 +218,14 @@
         private func runHandlingErrors(
             messages: [Message],
             executableTools: [AnyTool],
+            honourSelection: Bool,
             continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation
         ) async {
             do {
                 try await self.run(
                     messages: messages,
                     executableTools: executableTools,
+                    honourSelection: honourSelection,
                     continuation: continuation
                 )
             } catch is CancellationError {
@@ -224,6 +245,7 @@
         private func run(
             messages: [Message],
             executableTools: [AnyTool],
+            honourSelection: Bool,
             continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation
         ) async throws {
             try Self.checkAvailability()
@@ -252,7 +274,7 @@
             // none — so offer everything rather than nothing.
             let fmTools: [any FoundationModels.Tool]
             if executableTools.isEmpty {
-                fmTools = allTools
+                fmTools = honourSelection ? [] : allTools
             } else {
                 let selected = Set(executableTools.map(\.name))
                 fmTools = allTools.filter { selected.contains($0.name) }
