@@ -117,7 +117,30 @@ public struct LexicalToolSelector: ToolSelector {
         guard limit > 0, !tools.isEmpty else {
             return []
         }
-        let queryTerms = Set(Self.tokenize(query)).subtracting(self.stopWords)
+        // Stopwords are matched on the *surface* form, inside
+        // `tokenize`, not subtracted from the folded output.
+        //
+        // The order is the whole ballgame. Folding strips "-ing", so
+        // "fasting" becomes "fast" — and "fast" is on the list as a
+        // generic adjective, next to "quick" and "easy". Subtracting
+        // afterwards therefore deleted every form of the subject
+        // ("fasting", "fasts", "fast") from every query in a fasting
+        // app. Asked "How am I doing with fasting today?" against a
+        // surface containing `get_fasting_status`, this returned
+        // *nothing*: "how", "with" and "today" were stopped, "am" and
+        // "i" are too short, and the one word that mattered had been
+        // folded onto an adjective. The assembler read the empty
+        // ranking as "no tool is relevant" and sent none.
+        //
+        // Filtering before folding keeps both intents intact. The
+        // bare adjective "fast" still goes; the domain noun "fasting"
+        // survives. And nothing is lost on the generic verbs, because
+        // an inflected "getting" that now survives matches "get"
+        // across most of the corpus and IDF drives it to zero — which
+        // is precisely the case IDF handles well. The words that
+        // needed this list at all were the rare ones IDF *mis*-scores,
+        // and those are uninflected.
+        let queryTerms = Set(Self.tokenize(query, removing: self.stopWords))
         guard !queryTerms.isEmpty else {
             return []
         }
@@ -168,13 +191,19 @@ public struct LexicalToolSelector: ToolSelector {
     /// would treat each whole name as one opaque term and match almost
     /// nothing. Splitting identifiers into their words is what lets a
     /// query like "log my meal" reach `log_meal` at all.
-    static func tokenize(_ text: String) -> [String] {
+    /// - Parameter stopWords: Dropped by *surface* form, before
+    ///   folding — see the call site in `select` for why the order is
+    ///   load-bearing.
+    static func tokenize(_ text: String, removing stopWords: Set<String> = []) -> [String] {
         var terms: [String] = []
         var current = ""
 
         func flush() {
             if current.count > 1 {
-                terms.append(Self.fold(current.lowercased()))
+                let surface = current.lowercased()
+                if !stopWords.contains(surface) {
+                    terms.append(Self.fold(surface))
+                }
             }
             current = ""
         }
