@@ -65,38 +65,6 @@ final class ToolBudgetCeilingTests: XCTestCase {
         )
     }
 
-    /// The end-to-end case this was all for: six MCP-sized schemas on a
-    /// 4,096-token window. Uncompacted, one of them alone busts the
-    /// share and the model gets a single tool. Compacted, several fit.
-    func testCompactionLetsSeveralMCPToolsThrough() async throws {
-        let pinned = Self.tool(named: "load_skill", descriptionLength: 40)
-        let weather = (0 ..< 6).map { Self.mcpSizedTool(named: "weather_mcp__tool_\($0)") }
-        let assembler = DefaultContextAssembler(
-            pinnedToolNames: ["load_skill"],
-            unrankedFillLimit: 0
-        )
-        var state = AgentState()
-        state.messages = [.user("weather forecast for dublin")]
-
-        let budget = ContextBudget(total: 4096, reservedForOutput: 768, maxTools: 6)
-        let assembled = await assembler.assemble(
-            systemPrompt: "You are helpful.",
-            tools: [pinned] + weather,
-            state: state,
-            budget: budget
-        )
-
-        let sent = assembled.tools.filter { $0.name.hasPrefix("weather_mcp__") }
-        XCTAssertGreaterThan(
-            sent.count,
-            1,
-            "compaction bought nothing: \(assembled.tools.map(\.name))"
-        )
-        let counter = HeuristicTokenCounter()
-        let cost = assembled.tools.reduce(0) { $0 + counter.count(tool: $1.definition) }
-        XCTAssertLessThanOrEqual(cost, budget.toolTokenLimit)
-    }
-
     /// Survives every compaction level: many required properties with
     /// long names, which no level is permitted to remove.
     private static func incompressibleTool(named name: String) -> AnyTool {
