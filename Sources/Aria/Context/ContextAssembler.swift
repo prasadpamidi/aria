@@ -182,6 +182,14 @@ public struct DefaultContextAssembler: ContextAssembler {
             rankedToolNames: rankedNames,
             maxTools: budget.maxTools,
             toolTokenLimit: budget.toolTokenLimit,
+            imageCount: messages.reduce(0) { running, message in
+                running + message.content.reduce(0) { count, part in
+                    if case .image = part {
+                        return count + 1
+                    }
+                    return count
+                }
+            },
             messagesDropped: history.dropped,
             memoriesDropped: 0,
             toolResultsTruncated: truncated

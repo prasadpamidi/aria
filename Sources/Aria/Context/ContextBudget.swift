@@ -156,6 +156,7 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
         rankedToolNames: [String] = [],
         maxTools: Int? = nil,
         toolTokenLimit: Int = 0,
+        imageCount: Int = 0,
         messagesDropped: Int = 0,
         memoriesDropped: Int = 0,
         toolResultsTruncated: Int = 0
@@ -172,6 +173,7 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
         self.rankedToolNames = rankedToolNames
         self.maxTools = maxTools
         self.toolTokenLimit = toolTokenLimit
+        self.imageCount = imageCount
         self.messagesDropped = messagesDropped
         self.memoriesDropped = memoriesDropped
         self.toolResultsTruncated = toolResultsTruncated
@@ -222,6 +224,15 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
     public let maxTools: Int?
     /// Token ceiling in force for this turn.
     public let toolTokenLimit: Int
+    /// Images that survived assembly into the request.
+    ///
+    /// Asked "What's the tracking number" over a receipt photo, a model
+    /// answered from the caption alone and invented coordinates. The
+    /// diagnostic could not say whether the image had reached it — the
+    /// allocation described tokens and tools and was silent on the one
+    /// thing that mattered. Zero here with an attachment on screen
+    /// localises the loss to assembly; non-zero moves it downstream.
+    public let imageCount: Int
 
     /// History messages dropped to fit.
     public let messagesDropped: Int
