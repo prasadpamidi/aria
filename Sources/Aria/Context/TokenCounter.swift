@@ -41,8 +41,30 @@ extension TokenCounter {
         4
     }
 
+    /// What one image costs in the model's context.
+    ///
+    /// Vision models price an image by tile count — a 1024×1024 image
+    /// runs to roughly a thousand tokens on the Qwen-VL family — and
+    /// nothing about that is derivable from the bytes we hold. So this
+    /// is a constant, and a deliberately large one: an image counted at
+    /// zero is invisible to every budget decision downstream, which is
+    /// what happened before this existed. History windowing never
+    /// dropped an image message because it looked free, and the request
+    /// overflowed with the budget reporting itself satisfied.
+    ///
+    /// Over-charging costs a few tools. Under-charging costs the turn.
+    public var tokensPerImage: Int {
+        1024
+    }
+
     public func count(message: Message) -> Int {
         var total = self.count(text: message.textContent)
+        total += message.content.reduce(0) { running, part in
+            if case .image = part {
+                return running + self.tokensPerImage
+            }
+            return running
+        }
         for call in message.toolCalls {
             total += self.count(text: call.name)
             if let data = try? call.arguments.canonicalData() {

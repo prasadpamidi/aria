@@ -516,9 +516,29 @@ public struct DefaultContextAssembler: ContextAssembler {
             return (requiredTools, [])
         }
 
+        let query = Self.latestUserText(in: state.messages)
+        // An image-only turn has no text to rank against.
+        //
+        // That is not the same as "nothing matched", and conflating
+        // them sent zero tools: the selector returns nothing for an
+        // empty query, `unrankedFillLimit: 0` reads that as a decision,
+        // and a photo with no caption arrived at the model with no way
+        // to act on it. The ranker did not decide anything here — it
+        // was never given a question.
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return (
+                Self.fitting(
+                    requiredTools + candidates,
+                    required: requiredTools,
+                    ceiling: ceiling,
+                    cost: { self.tokenCounter.count(tool: $0.definition) }
+                ),
+                []
+            )
+        }
         let ranked = await self.selector.select(
             from: candidates.map(\.definition),
-            query: Self.latestUserText(in: state.messages),
+            query: query,
             limit: room
         )
         let byName = Dictionary(candidates.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
