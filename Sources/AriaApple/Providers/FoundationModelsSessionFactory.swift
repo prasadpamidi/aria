@@ -56,6 +56,12 @@
     @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
     @available(tvOS, unavailable)
     extension FoundationModelsSessionFactory {
+        private struct CapabilityCheck {
+            let requirement: FoundationModelsSessionRequirements
+            let capability: LanguageModelCapabilities.Capability
+            let name: String
+        }
+
         static func injected<Model: LanguageModel>(
             model: Model,
             declaredCapabilities: ProviderCapabilities
@@ -95,18 +101,22 @@
                 required.insert(.toolCalling)
             }
 
-            let checks: [(
-                FoundationModelsSessionRequirements,
-                LanguageModelCapabilities.Capability,
-                String
-            )] = [
-                (.vision, .vision, "vision"),
-                (.guidedGeneration, .guidedGeneration, "structured output"),
-                (.toolCalling, .toolCalling, "tool calling"),
+            let checks = [
+                CapabilityCheck(requirement: .vision, capability: .vision, name: "vision"),
+                CapabilityCheck(
+                    requirement: .guidedGeneration,
+                    capability: .guidedGeneration,
+                    name: "structured output"
+                ),
+                CapabilityCheck(
+                    requirement: .toolCalling,
+                    capability: .toolCalling,
+                    name: "tool calling"
+                ),
             ]
-            let missing = checks.compactMap { requirement, capability, name in
-                required.contains(requirement) && !available.contains(capability)
-                    ? name
+            let missing = checks.compactMap { check in
+                required.contains(check.requirement) && !available.contains(check.capability)
+                    ? check.name
                     : nil
             }
             guard missing.isEmpty else {
