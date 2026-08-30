@@ -242,7 +242,7 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer /Users/prasadmini/
 
 Expected: stable Xcode excludes Swift 6.4 declarations; Xcode 27 compiles them; all runnable tests pass.
 
-- [⚠️] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add Sources/AriaApple/Providers/FoundationModelsSessionFactory.swift Sources/AriaApple/Providers/FoundationModelsProvider.swift Tests/AriaAppleTests/Providers/FoundationModelsLanguageModelTests.swift
@@ -259,7 +259,7 @@ git commit -m "Accept iOS 27 language models in AriaApple"
 - Modify: `docs/layers/03-providers.md:247-270`
 - Modify: `docs/platform-boundary.md:80-126`
 
-- [ ] **Step 1: Add the public usage example**
+- [x] **Step 1: Add the public usage example**
 
 Show a consumer importing `CoreAILanguageModels`, loading `CoreAILanguageModel(resourcesAt:)`, and passing it to:
 
@@ -276,7 +276,7 @@ let provider = FoundationModelsProvider(
 
 State that the consumer owns the Core AI dependency, model assets, device eligibility, and fallback.
 
-- [ ] **Step 2: Record provider behavior**
+- [x] **Step 2: Record provider behavior**
 
 Document that:
 
@@ -286,7 +286,7 @@ Document that:
 - no automatic fallback occurs;
 - Core AI stays out of Aria's root package.
 
-- [ ] **Step 3: Name Niora's future seams**
+- [x] **Step 3: Name Niora's future seams**
 
 Document these exact insertion points:
 
@@ -296,7 +296,11 @@ Document these exact insertion points:
 
 Specify a developer-only custom-local subtype beneath `.useLocal` after simulator compatibility is resolved. Do not add a cloud/server resolution. Note that `FoundationModelsWorkflowProvider` stays separate until migrated to Aria's `LLMProvider` surface.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
+
+Verification: stable and Xcode 27 package suites pass. Focused strict lint is
+clean for the changed Swift source; the repository-wide strict lane remains
+blocked by 40 pre-existing violations outside this work.
 
 ```bash
 /Users/prasadmini/.rbenv/shims/bundle exec fastlane lint strict:true

@@ -256,6 +256,46 @@ Concrete implementations live in `AriaApple/Providers/` and conform to the proto
 
 The agent layer never sees the provider's native types.
 
+### Foundation Models model injection
+
+On iOS 27 and related Apple platform releases, `FoundationModelsProvider` can
+accept any concrete Foundation Models `LanguageModel`. Both Apple's default
+system model and an injected model use the same transcript, tool, streaming,
+and structured-output paths.
+
+The two initializers deliberately have different ownership rules:
+
+- `FoundationModelsProvider()` checks `SystemLanguageModel.default.availability`.
+- `FoundationModelsProvider(model:capabilities:)` uses only the supplied model.
+  It does not check system-model availability or fall back to the system model.
+- Declared capabilities that the injected model cannot provide fail with
+  `AgentError.configurationInvalid` before generation starts.
+- Session-construction and model-execution errors continue through the existing
+  `AgentError.providerFailed(..., underlying:)` stream error path.
+
+Aria does not load custom model resources and does not choose a fallback. The
+consumer owns the runtime package, assets, device eligibility, and routing
+policy. In particular, the root `Aria` target does not depend on Core AI;
+`AriaApple` integrates through Foundation Models protocols only.
+
+#### Niora integration map
+
+Once Core AI can coexist with Niora's normal simulator builds, Niora can add a
+developer-only custom-local subtype beneath its existing `.useLocal` resolution.
+It should not add a new cloud or server resolution for an on-device model. The
+relevant seams in Niora are:
+
+- `iOS/Niora/Services/AI/Runtime/AgentWiring.swift:63` — construct the injected
+  provider for seeded agents.
+- `iOS/Niora/LLMs/Aria/AriaContext.swift:557` — construct it for capability-based
+  agents while preserving the existing tool and middleware setup.
+- `iOS/Niora/Services/AICapabilityRouter.swift:96` — select the developer-only
+  custom-local subtype without changing production routing.
+
+`FoundationModelsWorkflowProvider` remains a separate Niora adapter until its
+workflow surface is migrated to Aria's `LLMProvider`; this integration must not
+silently bypass that boundary.
+
 ## What this layer does NOT include
 
 - Concrete provider implementations. Those live in `AriaApple`.
