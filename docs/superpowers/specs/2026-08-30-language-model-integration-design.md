@@ -93,7 +93,7 @@ The existing provider checks `SystemLanguageModel.default.availability`. That ch
 
 An injected model does not inherit that check. Its load or generation failures propagate through the existing provider error path. Aria does not invent a second availability abstraction until two non-system model implementations demonstrate a shared need.
 
-Callers provide Aria's `ProviderCapabilities` for an injected model. The provider validates obvious contradictions against `LanguageModel.capabilities` when the corresponding Apple capability is representable, including vision, guided generation, reasoning, and tool calling. Unsupported requested behavior fails before generation with a typed configuration error.
+Callers provide Aria's `ProviderCapabilities` for an injected model. The provider validates obvious contradictions against `LanguageModel.capabilities` where Aria has a corresponding declaration: vision, guided generation/structured output, and tool calling. Aria does not currently declare reasoning support, so the provider does not invent a new portable capability solely for this adapter. Unsupported requested behavior fails before generation with a typed configuration error.
 
 ## Dependency Boundary
 
