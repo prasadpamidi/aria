@@ -435,7 +435,11 @@ git commit -m "Add isolated Core AI device proof"
 
 - Update this checklist immediately as each step changes state.
 
-- [ ] **Step 1: Run regression gates**
+- [⚠️] **Step 1: Run regression gates**
+
+Stable and Xcode 27 package suites pass. The strict lint lane still fails on 40
+pre-existing violations; focused strict lint passes for every changed Swift
+source and the isolated proof sources.
 
 ```bash
 /Users/prasadmini/.rbenv/shims/bundle exec fastlane package_tests
@@ -445,7 +449,7 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer /Users/prasadmini/
 
 Expected: stable and beta suites plus lint pass.
 
-- [ ] **Step 2: Verify isolation and patch hygiene**
+- [x] **Step 2: Verify isolation and patch hygiene**
 
 ```bash
 rg -n "coreai-models|CoreAILanguageModels" Package.swift Sources Tests
@@ -455,7 +459,11 @@ git status --short
 
 Expected: no production/root references, a clean whitespace check, and only intended files.
 
-- [ ] **Step 3: Conduct focused review**
+- [x] **Step 3: Conduct focused review**
+
+Review found no Critical or Important issues. Two Minor full-range whitespace
+findings are addressed in Step 4. Physical proof execution remains an external
+runtime blocker, not an implementation defect.
 
 Verify:
 
@@ -468,11 +476,11 @@ Verify:
 - the proof is absent from the root graph;
 - Niora source and dependencies remain unchanged.
 
-- [ ] **Step 4: Address every finding and rerun affected gates**
+- [x] **Step 4: Address every finding and rerun affected gates**
 
 Apply each fix test-first and mark its checklist item immediately.
 
-- [ ] **Step 5: Commit review adjustments if any**
+- [x] **Step 5: Commit review adjustments if any**
 
 ```bash
 git add -A
@@ -483,18 +491,18 @@ Skip when review produces no changes.
 
 ## Success Criteria
 
-- [ ] Existing provider consumers compile unchanged on Xcode 26.6.
-- [ ] Xcode 27 consumers can inject any concrete `LanguageModel`.
-- [ ] Text, executable-tool, and structured paths use the injected factory.
-- [ ] Unsupported declared/requested capabilities fail before generation.
-- [ ] Injected models never silently fall back to the system model.
-- [ ] Stable tests/lint and Xcode 27 compilation pass.
-- [ ] Qwen3-0.6B completes all four physical-device proof cases.
-- [ ] Niora's future routing seams are documented without changing its package graph.
+- [x] Existing provider consumers compile unchanged on Xcode 26.6.
+- [x] Xcode 27 consumers can inject any concrete `LanguageModel`.
+- [x] Text, executable-tool, and structured paths use the injected factory.
+- [x] Unsupported declared/requested capabilities fail before generation.
+- [x] Injected models never silently fall back to the system model.
+- [⚠️] Stable tests and Xcode 27 compilation pass; strict lint remains blocked by 40 pre-existing violations.
+- [⚠️] Qwen3-0.6B physical-device cases await model resources and a connected iOS 27 device.
+- [x] Niora's future routing seams are documented without changing its package graph.
 
 ## Documentation Updates Required
 
-- [ ] `README.md` includes custom-model injection.
-- [ ] `docs/layers/03-providers.md` explains behavior and Niora seams.
-- [ ] `docs/platform-boundary.md` records dependency ownership.
-- [ ] `Examples/CoreAIProof/README.md` contains complete device steps.
+- [x] `README.md` includes custom-model injection.
+- [x] `docs/layers/03-providers.md` explains behavior and Niora seams.
+- [x] `docs/platform-boundary.md` records dependency ownership.
+- [x] `Examples/CoreAIProof/README.md` contains complete device steps.
