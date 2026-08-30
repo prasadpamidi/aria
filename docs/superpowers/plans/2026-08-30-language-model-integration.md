@@ -34,40 +34,41 @@
 - Modify: `Tests/AriaAppleTests/Providers/FoundationModelsStructuredTests.swift:18-43`
 - Create if shared helpers are needed: `Tests/AriaAppleTests/Providers/FoundationModelsSessionFactoryTestSupport.swift`
 
-- [ ] **Step 1: Add failing tests for all session paths**
+- [x] **Step 1: Add failing tests for all session paths**
 
-Add a lock-protected probe whose factory builder records requirements and throws before inference:
+Add an outcome-based test factory. Its validator throws one error when the provider requests the expected requirements and a different error for the wrong requirements. Assert the error preserved by the public stream, not the test double's internal state:
 
 ```swift
-private enum SessionProbeError: Error { case stop }
+enum SessionFactoryTestError: Error {
+    case expectedRequirementsReached
+    case unexpectedRequirements(FoundationModelsSessionRequirements)
+    case builderReached
+}
 
-final class SessionFactoryProbe: @unchecked Sendable {
-    private let lock = NSLock()
-    private var recorded: [FoundationModelsSessionRequirements] = []
-
-    var requirements: [FoundationModelsSessionRequirements] {
-        self.lock.withLock { self.recorded }
-    }
-
-    func factory() -> FoundationModelsSessionFactory {
+func testFactory(
+    expecting expected: FoundationModelsSessionRequirements
+) -> FoundationModelsSessionFactory {
         FoundationModelsSessionFactory(
-            validate: { _ in },
-            build: { [weak self] _, _, requirements in
-                self?.lock.withLock { self?.recorded.append(requirements) }
-                throw SessionProbeError.stop
+            validate: { actual in
+                guard actual == expected else {
+                    throw SessionFactoryTestError.unexpectedRequirements(actual)
+                }
+                throw SessionFactoryTestError.expectedRequirementsReached
+            },
+            build: { _, _, _ in
+                throw SessionFactoryTestError.builderReached
             }
         )
-    }
 }
 ```
 
 Add tests named:
 
-- `testTextStreamRequestsSessionFromConfiguredFactory` expecting `[[]]`;
-- `testExecutableToolStreamRequestsSessionFromConfiguredFactory` expecting `[[]]`;
-- `testStructuredStreamRequestsGuidedSessionFromConfiguredFactory` expecting `[.guidedGeneration]`.
+- `testTextStreamUsesConfiguredFactory` expecting `[]`;
+- `testTextStreamRequestsToolCallingWhenTypedToolsAreOffered` expecting `.toolCalling`;
+- `testStructuredStreamRequestsGuidedGeneration` expecting `.guidedGeneration`.
 
-Each consumes the returned stream, expects `AgentError.providerFailed`, and then checks the probe. No real model runs.
+Each consumes the returned stream and requires `AgentError.providerFailed` whose underlying `ErrorBox.typeName` is `SessionFactoryTestError`. Also require the message to identify `expectedRequirementsReached`, so a wrong requirement or an accidentally reached builder cannot satisfy the assertion. No real model runs.
 
 Run:
 
@@ -77,7 +78,7 @@ Run:
 
 Expected: compilation fails because the factory, requirements, and internal provider initializer do not exist.
 
-- [ ] **Step 2: Implement the factory**
+- [x] **Step 2: Implement the factory**
 
 Create:
 
@@ -109,7 +110,7 @@ Create:
         }
 
         static let systemDefault = Self(
-            validate: { _ in try FoundationModelsProvider.checkSystemModelAvailability() },
+            validate: { _ in try FoundationModelsProvider.checkAvailability() },
             build: { tools, transcript, _ in
                 LanguageModelSession(tools: tools, transcript: transcript)
             }
@@ -130,7 +131,7 @@ Create:
 #endif
 ```
 
-Make the existing public initializer delegate to an internal initializer with `.systemDefault`. Store `sessionFactory`, and rename `checkAvailability()` to `checkSystemModelAvailability()`.
+Make the existing public initializer delegate to an internal initializer with `.systemDefault`. Store `sessionFactory`, and keep `checkAvailability()` as the system factory's validator so existing prompt probes remain source-compatible.
 
 Replace the text-path constructor with:
 
@@ -146,7 +147,7 @@ let session = try self.sessionFactory.makeSession(
 
 Replace the structured-path constructor with the same call, starting from `[.guidedGeneration]` and adding `.toolCalling` when tools are present.
 
-- [ ] **Step 3: Verify and commit**
+- [⚠️] **Step 3: Verify and commit**
 
 ```bash
 /Users/prasadmini/.rbenv/shims/bundle exec fastlane package_tests
@@ -489,4 +490,3 @@ Skip when review produces no changes.
 - [ ] `docs/layers/03-providers.md` explains behavior and Niora seams.
 - [ ] `docs/platform-boundary.md` records dependency ownership.
 - [ ] `Examples/CoreAIProof/README.md` contains complete device steps.
-
