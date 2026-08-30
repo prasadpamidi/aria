@@ -322,7 +322,7 @@ git commit -m "Document custom LanguageModel injection"
 - Create: `Examples/CoreAIProof/Tests/CoreAIProofTests/Resources/README.md`
 - Modify: `.gitignore`
 
-- [ ] **Step 1: Create the nested package**
+- [x] **Step 1: Create the nested package**
 
 Use a Swift 6.4 manifest with iOS 27 platform, local dependency `.package(path: "../..")`, and:
 
@@ -343,7 +343,7 @@ swift package show-dependencies
 
 Expected: `coreai-models` is absent from the root graph. This read-only graph inspection is the narrow exception to the Fastlane rule.
 
-- [ ] **Step 2: Ignore proof assets and output**
+- [x] **Step 2: Ignore proof assets and output**
 
 Add:
 
@@ -363,7 +363,7 @@ uv run coreai.llm.export Qwen/Qwen3-0.6B --platform iOS --output-dir ./exported-
 
 and direct the exported resource folder to `Tests/CoreAIProofTests/Resources/Qwen3-0.6B/`.
 
-- [ ] **Step 3: Add proof code**
+- [x] **Step 3: Add proof code**
 
 Add a deterministic `GenerableTool` named `coreai_aria_proof` whose JSON output always includes `COREAI_ARIA_TOOL_OK`. Confirm its method signature against `Sources/Aria/Providers/Tool.swift` before writing it.
 
@@ -382,7 +382,7 @@ let model = try await CoreAILanguageModel(resourcesAt: resources, mode: .eager)
 
 Build declared capabilities from `model.capabilities`, register the proof tool, and inject the model into `FoundationModelsProvider`.
 
-- [ ] **Step 4: Add four opt-in cases**
+- [x] **Step 4: Add four opt-in cases**
 
 Gate the suite with `COREAI_ARIA_PROOF=1`. With the gate enabled, missing resources must fail clearly.
 
@@ -395,7 +395,11 @@ Add:
 
 Measure each with `ContinuousClock` and print timings. Add no performance thresholds and make no MLX comparison.
 
-- [ ] **Step 5: Document and compile for a physical target**
+- [⚠️] **Step 5: Document and compile for a physical target**
+
+`build-for-testing` succeeds for generic iOS with Xcode 27. Running the four
+cases remains pending because the ignored Qwen3-0.6B resources and a connected
+iOS 27 device are not present in this worktree/session.
 
 The proof README must cover Xcode 27, an iOS 27 physical device, model export/copy, the environment gate, the upstream simulator limitation, and the fact that timings are diagnostics.
 
@@ -408,7 +412,7 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer xcodebuild build-f
 
 Expected: build-for-testing succeeds. Then open `Package.swift` in Xcode, select a connected physical iPhone, set `COREAI_ARIA_PROOF=1` on the test scheme, and run all four tests. Expected: all finish and the console prints timing plus a `TaskEval` summary.
 
-- [ ] **Step 6: Verify isolation and commit**
+- [x] **Step 6: Verify isolation and commit**
 
 ```bash
 cd ../..

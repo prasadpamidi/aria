@@ -56,3 +56,10 @@ Icon
 # Local git worktrees (Claude / superpowers convention)
 .worktrees/
 Vendor/
+
+# Opt-in Core AI device proof
+Examples/CoreAIProof/Tests/CoreAIProofTests/Resources/Qwen3-0.6B/
+Examples/CoreAIProof/Reports/
+Examples/CoreAIProof/.build/
+Examples/CoreAIProof/.swiftpm/
+Examples/CoreAIProof/Package.resolved
