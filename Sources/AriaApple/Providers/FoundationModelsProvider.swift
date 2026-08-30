@@ -31,9 +31,45 @@
             capabilities: ProviderCapabilities = .foundationModelsDefault,
             typedTools: [FoundationModelsToolFactory] = []
         ) {
+            self.init(
+                defaultInstructions: defaultInstructions,
+                capabilities: capabilities,
+                typedTools: typedTools,
+                sessionFactory: .systemDefault
+            )
+        }
+
+        #if compiler(>=6.4)
+            @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
+            @available(tvOS, unavailable)
+            public init(
+                model: some LanguageModel,
+                defaultInstructions: String? = nil,
+                capabilities: ProviderCapabilities,
+                typedTools: [FoundationModelsToolFactory] = []
+            ) {
+                self.init(
+                    defaultInstructions: defaultInstructions,
+                    capabilities: capabilities,
+                    typedTools: typedTools,
+                    sessionFactory: .injected(
+                        model: model,
+                        declaredCapabilities: capabilities
+                    )
+                )
+            }
+        #endif
+
+        init(
+            defaultInstructions: String? = nil,
+            capabilities: ProviderCapabilities = .foundationModelsDefault,
+            typedTools: [FoundationModelsToolFactory] = [],
+            sessionFactory: FoundationModelsSessionFactory
+        ) {
             self.defaultInstructions = defaultInstructions
             self.capabilities = capabilities
             self.typedTools = typedTools
+            self.sessionFactory = sessionFactory
         }
 
         // MARK: Public
@@ -84,6 +120,7 @@
         // `FoundationModelsStructured.swift`).
         let defaultInstructions: String?
         let typedTools: [FoundationModelsToolFactory]
+        let sessionFactory: FoundationModelsSessionFactory
 
         /// Pull the new-turn prompt out of the message list. Returns the
         /// text that should be sent via `streamResponse(to:)` plus the
@@ -248,8 +285,6 @@
             honourSelection: Bool,
             continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation
         ) async throws {
-            try Self.checkAvailability()
-
             let (prompt, history) = try Self.extractPrompt(from: messages)
             // Build the typed FM tools. Each factory is invoked with a
             // closure that yields events into this stream's
@@ -305,9 +340,14 @@
                 defaultInstructions: self.defaultInstructions,
                 toolDefinitions: toolDefinitions
             )
-            let session = LanguageModelSession(
+            var requirements: FoundationModelsSessionRequirements = []
+            if !registrableTools.isEmpty {
+                requirements.insert(.toolCalling)
+            }
+            let session = try self.sessionFactory.makeSession(
                 tools: registrableTools,
-                transcript: transcript
+                transcript: transcript,
+                requirements: requirements
             )
 
             let messageId = UUID().uuidString

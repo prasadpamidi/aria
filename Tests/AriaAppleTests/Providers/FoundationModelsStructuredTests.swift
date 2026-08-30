@@ -42,6 +42,19 @@
             }
         }
 
+        func testStructuredStreamRequestsGuidedGeneration() async {
+            let provider = FoundationModelsProvider(
+                sessionFactory: testSessionFactory(expecting: [.guidedGeneration])
+            )
+
+            await assertExpectedSessionRequirements(
+                in: provider.streamStructured(
+                    messages: [.user("Give me one short quote.")],
+                    as: TestQuote.self
+                )
+            )
+        }
+
         // MARK: - Agent extension surface
 
         func testAgentRespondDecodesNonFMProviderTextDeltasAsJSON() async throws {

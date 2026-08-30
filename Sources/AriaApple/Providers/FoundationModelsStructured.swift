@@ -68,7 +68,6 @@
                 StructuredResponseEvent<Content>, any Error
             >.Continuation
         ) async throws where Content.PartiallyGenerated: Sendable {
-            try Self.checkAvailability()
             let (prompt, history) = try Self.extractPrompt(from: messages)
 
             // Forward each tool's `toolCallExecuted` ProviderEvent into
@@ -89,7 +88,15 @@
                 defaultInstructions: self.defaultInstructions,
                 toolDefinitions: toolDefinitions
             )
-            let session = LanguageModelSession(tools: fmTools, transcript: transcript)
+            var requirements: FoundationModelsSessionRequirements = [.guidedGeneration]
+            if !fmTools.isEmpty {
+                requirements.insert(.toolCalling)
+            }
+            let session = try self.sessionFactory.makeSession(
+                tools: fmTools,
+                transcript: transcript,
+                requirements: requirements
+            )
 
             let stream = session.streamResponse(to: prompt, generating: type)
             var lastRaw: GeneratedContent?

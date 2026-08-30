@@ -7,6 +7,25 @@ and Aria adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-08-30
+
+### Added
+
+- **Custom Apple `LanguageModel` injection on iOS 27 and related platform releases.**
+  `FoundationModelsProvider` can now construct sessions from any Foundation
+  Models `LanguageModel`, including models backed by Core AI, while retaining
+  the existing transcript, tools, streaming, structured-output, and error
+  handling paths. Aria validates declared model capabilities before generation
+  and leaves model loading, routing, and fallback policy to the host app.
+- **An isolated Core AI device proof.** The example package demonstrates the
+  integration boundary without adding Core AI or model assets to Aria's core
+  dependency graph.
+
+### Changed
+
+- Foundation Models session creation now flows through one internal factory so
+  the system model and injected models share the same execution behavior.
+
 ## [0.1.4] - 2026-05-26
 
 ### Added

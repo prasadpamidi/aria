@@ -154,6 +154,37 @@
             )
         }
 
+        // MARK: - Session construction
+
+        func testTextStreamUsesConfiguredFactory() async {
+            let provider = FoundationModelsProvider(
+                sessionFactory: testSessionFactory(expecting: [])
+            )
+
+            await assertExpectedSessionRequirements(
+                in: provider.stream(
+                    messages: [.user("hello")],
+                    tools: [],
+                    options: .init()
+                )
+            )
+        }
+
+        func testTextStreamRequestsToolCallingWhenTypedToolsAreOffered() async {
+            let provider = FoundationModelsProvider(
+                typedTools: [{ _ in SessionFactoryTestTool() }],
+                sessionFactory: testSessionFactory(expecting: [.toolCalling])
+            )
+
+            await assertExpectedSessionRequirements(
+                in: provider.stream(
+                    messages: [.user("use the tool")],
+                    tools: [],
+                    options: .init()
+                )
+            )
+        }
+
         // MARK: - Smoke test (requires real model availability)
 
         func testStreamProducesTextDeltasWhenModelAvailable() async throws {

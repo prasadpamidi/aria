@@ -304,6 +304,33 @@ for try await event in agent.stream(.message(.user("What's the time in Tokyo?"))
 }
 ```
 
+### Custom Apple language models (iOS 27+)
+
+`AriaApple` accepts any Foundation Models `LanguageModel`, so an app can run a
+Core AI model through the same `LLMProvider`, agent, tool, memory, and middleware
+surfaces as Apple's system model:
+
+```swift
+import Aria
+import AriaApple
+import CoreAILanguageModels
+import FoundationModels
+
+let model = try await CoreAILanguageModel(resourcesAt: modelResourcesURL)
+let provider = FoundationModelsProvider(
+    model: model,
+    capabilities: ProviderCapabilities(
+        modelIdentifier: "coreai.qwen3-0.6b",
+        supportsToolUse: model.capabilities.contains(.toolCalling),
+        supportsStructuredOutput: model.capabilities.contains(.guidedGeneration)
+    )
+)
+```
+
+The app owns the Core AI package dependency, model resources, device-eligibility
+checks, and fallback policy. Aria depends only on Foundation Models protocols and
+does not silently replace an injected model when it cannot load or execute.
+
 ### Production-grade middleware stack
 
 Long-running threads need bounded context, a summary of older turns, and a

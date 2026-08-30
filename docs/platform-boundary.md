@@ -84,6 +84,19 @@ Aria uses `#if canImport(...)` sparingly. The preferred pattern is **physical se
 
 If conditional compilation is unavoidable in core (very rare), use `#if canImport(...)` rather than `#if os(...)`. Reason: `canImport` is robust to future platforms; `os` requires updating every time a new target appears.
 
+## Apple model adapters
+
+Foundation Models adapters belong in `AriaApple`. The portable `LLMProvider`
+surface in `Aria` must not expose `LanguageModel`, `LanguageModelSession`, or
+other Apple framework types.
+
+An application may inject an iOS 27 `LanguageModel` into
+`FoundationModelsProvider`, including one supplied by Core AI. The application
+owns that runtime dependency and its model resources. Neither the root package
+graph nor `AriaApple` should add a direct Core AI dependency: integration occurs
+through the Foundation Models protocol, keeping Core AI optional and leaving
+device eligibility and fallback decisions with the application.
+
 ## CI enforcement
 
 Aria's CI matrix:
