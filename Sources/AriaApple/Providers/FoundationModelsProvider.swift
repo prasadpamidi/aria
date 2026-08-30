@@ -311,6 +311,16 @@
             if executableTools.isEmpty {
                 fmTools = honourSelection ? [] : allTools
             } else {
+                // Name-matched only.
+                //
+                // Note what this *cannot* do: adopt a description the
+                // assembler rewrote. These instances come from factory
+                // closures supplied at construction, which captured
+                // their description then — so any later change to a
+                // definition reaches the `AnyTool` and not the tool
+                // registered here. That is why the assembler does not
+                // compact definitions; see the note in
+                // `ContextAssembler.fitting`.
                 let selected = Set(executableTools.map(\.name))
                 fmTools = allTools.filter { selected.contains($0.name) }
             }

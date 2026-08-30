@@ -115,10 +115,27 @@ public struct DefaultContextAssembler: ContextAssembler {
         state: AgentState,
         budget: ContextBudget
     ) async -> AssembledContext {
-        let selectedTools = await self.selectTools(
+        let (ranked, rankedNames) = await self.selectTools(
             from: tools,
             state: state,
             budget: budget
+        )
+        // Last line of defence: tools must leave room for the message
+        // they are meant to answer.
+        //
+        // `toolTokenLimit` is a *share* and is deliberately breakable —
+        // sending no usable tool is worse than overspending the share.
+        // `available` is not. Without a hard bound the two rules
+        // compose into the worst outcome: a run selected three MCP
+        // tools worth 4,533 tokens against a 1,198 share and a 2,996
+        // budget, history collapsed to nothing to make room, and the
+        // provider refused the request at 4,727 of 4,096 — so the turn
+        // failed anyway, having thrown away the conversation first.
+        let selectedTools = self.withinHardLimit(
+            ranked,
+            systemPrompt: systemPrompt,
+            budget: budget,
+            state: state
         )
 
         // Guidance rides with the tools that survived, so instructions
@@ -161,6 +178,18 @@ public struct DefaultContextAssembler: ContextAssembler {
             toolsOffered: tools.count,
             toolsSelected: selectedTools.count,
             selectedToolNames: selectedTools.map(\.name),
+            offeredToolNames: tools.map(\.name),
+            rankedToolNames: rankedNames,
+            maxTools: budget.maxTools,
+            toolTokenLimit: budget.toolTokenLimit,
+            imageCount: messages.reduce(0) { running, message in
+                running + message.content.reduce(0) { count, part in
+                    if case .image = part {
+                        return count + 1
+                    }
+                    return count
+                }
+            },
             messagesDropped: history.dropped,
             memoriesDropped: 0,
             toolResultsTruncated: truncated
@@ -327,6 +356,119 @@ public struct DefaultContextAssembler: ContextAssembler {
         return out.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// Drop ranked tools that do not fit the token ceiling.
+    ///
+    /// `maxTools` bounds the *count* of tools; this bounds their
+    /// *cost*. Both are needed, and only the count was enforced on the
+    /// ranked path — the ceiling was consulted for the "everything
+    /// already fits" early exit and for filler, then skipped entirely
+    /// once ranking returned something. Six tools is a fine cap until
+    /// the six are MCP schemas: a connected weather server put 5,845
+    /// tokens into a 4,096-token window and the whole turn was
+    /// refused, with the budget reporting itself satisfied.
+    ///
+    /// Required tools are kept regardless. They are pinned or already
+    /// invoked this turn, and dropping one breaks the conversation
+    /// outright, where overshooting only risks a refusal that trimming
+    /// the rest may still avoid.
+    ///
+    /// Ranked tools are taken in order and the first that does not fit
+    /// stops the loop rather than being skipped over. Skipping to a
+    /// smaller lower-ranked tool would quietly prefer cheap tools to
+    /// relevant ones, which is the opposite of what ranking is for.
+    private static func fitting(
+        _ selected: [AnyTool],
+        required: [AnyTool],
+        ceiling: Int,
+        cost: (AnyTool) -> Int
+    ) -> [AnyTool] {
+        let requiredNames = Set(required.map(\.name))
+        var kept = required
+        var spent = required.reduce(0) { $0 + cost($1) }
+        // Compaction is deliberately *not* applied here.
+        //
+        // `ToolDefinitionCompactor` shrinks a definition safely, and
+        // shrinking one changes what the assembler counts. It does not
+        // change what every provider sends: `FoundationModelsProvider`
+        // builds its typed tools from factory closures supplied at
+        // construction, which captured the original description and
+        // cannot see a definition swapped afterwards.
+        //
+        // So compacting here made the budget lie. Measured: a turn
+        // priced at 1,366 tokens was refused at 5,362 — the assembler
+        // had costed six compacted tools and the provider had sent six
+        // full ones. An accurate budget with fewer tools beats an
+        // inaccurate budget with more, and a refused turn sends none at
+        // all.
+        //
+        // The compactor keeps its tests and stays ready for the path
+        // that can honour it: a provider that builds its tool list from
+        // `AssembledContext.tools` rather than from closures fixed at
+        // construction.
+        for tool in selected where !requiredNames.contains(tool.name) {
+            let next = cost(tool)
+            guard spent + next <= ceiling else {
+                break
+            }
+            kept.append(tool)
+            spent += next
+        }
+
+        // If the share admitted nothing, admit the best one anyway.
+        //
+        // `ceiling` is a *share* of the budget — 40% by default — not
+        // the window. Honouring it strictly is right when it costs a
+        // fourth tool and wrong when it costs the only one: a turn with
+        // no actionable tool cannot do the thing it was asked to do,
+        // and no amount of budget discipline redeems that.
+        //
+        // Observed: a weather question ranked `get_weather_summary`
+        // second out of six, and every MCP schema on that server runs
+        // to roughly a thousand tokens — over the 1,080 left after the
+        // pinned tool. The trim was correct by its own rule and
+        // returned a request that could only answer from imagination,
+        // which is exactly what the model then did.
+        //
+        // The one admitted here is the top-ranked, not the smallest
+        // that fits. Preferring a cheap tool to a relevant one inverts
+        // ranking, and this is a last resort rather than a second
+        // policy.
+        if kept.count == required.count,
+           let best = selected.first(where: { !requiredNames.contains($0.name) }) {
+            kept.append(best)
+        }
+        return kept
+    }
+
+    /// Drop tools until the request can physically fit, whatever the
+    /// share allowed.
+    ///
+    /// Tools are dropped from the end — lowest-ranked first — and the
+    /// prompt is recomposed each time, because guidance rides with the
+    /// tools that survived. The newest message is reserved for: a
+    /// request that cannot carry the user's turn is not a smaller
+    /// request, it is a broken one.
+    private func withinHardLimit(
+        _ selected: [AnyTool],
+        systemPrompt: String?,
+        budget: ContextBudget,
+        state: AgentState
+    ) -> [AnyTool] {
+        let newestTokens = state.messages.last
+            .map { self.tokenCounter.count(message: $0) } ?? 0
+        var kept = selected
+        while !kept.isEmpty {
+            let prompt = Self.compose(systemPrompt: systemPrompt, guidanceFrom: kept)
+            let promptTokens = prompt.map { self.tokenCounter.count(text: $0) } ?? 0
+            let toolTokens = kept.reduce(0) { $0 + self.tokenCounter.count(tool: $1.definition) }
+            if promptTokens + toolTokens + newestTokens <= budget.available {
+                return kept
+            }
+            kept.removeLast()
+        }
+        return kept
+    }
+
     /// Cost of the recalled-memory block, if the caller named it.
     private func memoryTokens(in messages: [Message]) -> Int {
         guard let prefix = memoryMessagePrefix else {
@@ -337,13 +479,19 @@ public struct DefaultContextAssembler: ContextAssembler {
             .reduce(0) { $0 + self.tokenCounter.count(message: $1) }
     }
 
+    /// - Returns: The tools to send, and — separately — what ranking
+    ///   chose *before* the token ceiling trimmed it. The difference
+    ///   between those two lists is the whole diagnosis when a tool
+    ///   goes missing: empty `ranked` means the ranker found nothing,
+    ///   while a full `ranked` and a short `selected` means the budget
+    ///   did the cutting. Both look identical from the outside.
     private func selectTools(
         from tools: [AnyTool],
         state: AgentState,
         budget: ContextBudget
-    ) async -> [AnyTool] {
+    ) async -> (selected: [AnyTool], ranked: [String]) {
         guard !tools.isEmpty else {
-            return []
+            return ([], [])
         }
 
         let maxTools = budget.maxTools ?? Int.max
@@ -359,7 +507,7 @@ public struct DefaultContextAssembler: ContextAssembler {
         // where it was absent.
         let totalCost = tools.reduce(0) { $0 + self.tokenCounter.count(tool: $1.definition) }
         if tools.count <= maxTools, totalCost <= ceiling {
-            return tools
+            return (tools, tools.map(\.name))
         }
 
         let required = self.pinnedToolNames
@@ -373,16 +521,37 @@ public struct DefaultContextAssembler: ContextAssembler {
         // only costs tokens.
         let room = maxTools == Int.max ? candidates.count : max(0, maxTools - requiredTools.count)
         guard room > 0, !candidates.isEmpty else {
-            return requiredTools
+            return (requiredTools, [])
         }
 
+        let query = Self.latestUserText(in: state.messages)
+        // An image-only turn has no text to rank against.
+        //
+        // That is not the same as "nothing matched", and conflating
+        // them sent zero tools: the selector returns nothing for an
+        // empty query, `unrankedFillLimit: 0` reads that as a decision,
+        // and a photo with no caption arrived at the model with no way
+        // to act on it. The ranker did not decide anything here — it
+        // was never given a question.
+        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return (
+                Self.fitting(
+                    requiredTools + candidates,
+                    required: requiredTools,
+                    ceiling: ceiling,
+                    cost: { self.tokenCounter.count(tool: $0.definition) }
+                ),
+                []
+            )
+        }
         let ranked = await self.selector.select(
             from: candidates.map(\.definition),
-            query: Self.latestUserText(in: state.messages),
+            query: query,
             limit: room
         )
         let byName = Dictionary(candidates.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
         var selected = requiredTools + ranked.compactMap { byName[$0.name] }
+        let rankedNames = selected.map(\.name)
 
         // Fill only when ranking had nothing to say.
         //
@@ -406,14 +575,22 @@ public struct DefaultContextAssembler: ContextAssembler {
         // and a half-empty context window is only a problem if the tool
         // the user needed is the part that's missing.
         guard selected.count == requiredTools.count else {
-            return selected
+            return (
+                Self.fitting(
+                    selected,
+                    required: requiredTools,
+                    ceiling: ceiling,
+                    cost: { self.tokenCounter.count(tool: $0.definition) }
+                ),
+                rankedNames
+            )
         }
 
         // Nothing scored. How much to read into that depends on the
         // ranker, so the caller decides — see `unrankedFillLimit`.
         let fillCeiling = self.unrankedFillLimit ?? maxTools
         guard fillCeiling > 0 else {
-            return selected
+            return (selected, rankedNames)
         }
         var chosen = Set(selected.map(\.name))
         var spent = selected.reduce(0) { $0 + self.tokenCounter.count(tool: $1.definition) }
@@ -433,7 +610,7 @@ public struct DefaultContextAssembler: ContextAssembler {
             filled += 1
         }
 
-        return selected
+        return (selected, rankedNames)
     }
 
     /// Cap each tool result at `limit` tokens, returning the bounded

@@ -152,6 +152,11 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
         toolsOffered: Int = 0,
         toolsSelected: Int = 0,
         selectedToolNames: [String] = [],
+        offeredToolNames: [String] = [],
+        rankedToolNames: [String] = [],
+        maxTools: Int? = nil,
+        toolTokenLimit: Int = 0,
+        imageCount: Int = 0,
         messagesDropped: Int = 0,
         memoriesDropped: Int = 0,
         toolResultsTruncated: Int = 0
@@ -164,6 +169,11 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
         self.toolsOffered = toolsOffered
         self.toolsSelected = toolsSelected
         self.selectedToolNames = selectedToolNames
+        self.offeredToolNames = offeredToolNames
+        self.rankedToolNames = rankedToolNames
+        self.maxTools = maxTools
+        self.toolTokenLimit = toolTokenLimit
+        self.imageCount = imageCount
         self.messagesDropped = messagesDropped
         self.memoriesDropped = memoriesDropped
         self.toolResultsTruncated = toolResultsTruncated
@@ -192,6 +202,37 @@ public struct ContextAllocation: Sendable, Equatable, Codable {
     /// is "was the tool I expected even offered?", and only the list
     /// answers it.
     public let selectedToolNames: [String]
+    /// Every tool the selector could have chosen from.
+    ///
+    /// `toolsOffered` was a count, which is enough to notice a surprise
+    /// and never enough to explain one. Asked for a weather summary
+    /// with a weather server connected, a run sent exactly one tool
+    /// (`load_skill`) out of twenty-eight — and the count could not
+    /// distinguish "the ranker buried the weather tools" from "the
+    /// weather tools were never candidates", which have nothing in
+    /// common except the symptom.
+    public let offeredToolNames: [String]
+    /// What ranking chose, *before* the token ceiling trimmed it.
+    ///
+    /// The distinction is the whole diagnosis. If this is empty the
+    /// ranker found nothing and the query or the corpus is the
+    /// problem; if it is full and `selectedToolNames` is short, the
+    /// budget did the cutting. Both end with a tool missing from the
+    /// request and there is otherwise no way to tell them apart.
+    public let rankedToolNames: [String]
+    /// Count cap in force for this turn.
+    public let maxTools: Int?
+    /// Token ceiling in force for this turn.
+    public let toolTokenLimit: Int
+    /// Images that survived assembly into the request.
+    ///
+    /// Asked "What's the tracking number" over a receipt photo, a model
+    /// answered from the caption alone and invented coordinates. The
+    /// diagnostic could not say whether the image had reached it — the
+    /// allocation described tokens and tools and was silent on the one
+    /// thing that mattered. Zero here with an attachment on screen
+    /// localises the loss to assembly; non-zero moves it downstream.
+    public let imageCount: Int
 
     /// History messages dropped to fit.
     public let messagesDropped: Int

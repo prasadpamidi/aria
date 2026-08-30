@@ -105,10 +105,22 @@ extension Agent {
     ) async -> ToolExecutionResult {
         let context = ToolContext(runId: UUID())
         let started = ContinuousClock.now
+        // Reconcile the model's arguments with the schema it was given.
+        //
+        // Small models quote their numbers. A 0.8B model called a
+        // weather tool with `{"days": "1", "latitude": "56.35"}` and
+        // the server refused it — right tool, right intent, right
+        // values, defeated by quotation marks. The schema says what
+        // each field is, so this is fixable here rather than by asking
+        // the model to try again.
+        let arguments = ToolArgumentCoercion.coerce(
+            call.arguments,
+            to: tool.definition.inputSchema
+        )
         do {
             let output = try await Self.runWithTimeout(
                 timeout: self.config.toolTimeout,
-                operation: { try await tool.invoke(call.arguments, context) }
+                operation: { try await tool.invoke(arguments, context) }
             )
             return ToolExecutionResult(
                 output: output,

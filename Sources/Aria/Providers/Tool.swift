@@ -138,6 +138,17 @@ public struct AnyTool: Sendable {
 
     public let definition: ToolDefinition
     public let invoke: @Sendable (JSONValue, ToolContext) async throws -> JSONValue
+
+    /// The same tool, advertised differently.
+    ///
+    /// Used to send a compacted schema while keeping the original
+    /// invocation. What the model is *told* about a tool and what
+    /// happens when it calls one are separate concerns, and this is the
+    /// seam between them — the closure is untouched, so a compacted
+    /// definition cannot change behaviour, only description.
+    public func replacingDefinition(_ definition: ToolDefinition) -> AnyTool {
+        AnyTool(definition: definition, invoke: self.invoke)
+    }
 }
 
 extension AnyTool {
