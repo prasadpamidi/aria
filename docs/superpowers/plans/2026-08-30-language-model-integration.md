@@ -147,7 +147,7 @@ let session = try self.sessionFactory.makeSession(
 
 Replace the structured-path constructor with the same call, starting from `[.guidedGeneration]` and adding `.toolCalling` when tools are present.
 
-- [⚠️] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 /Users/prasadmini/.rbenv/shims/bundle exec fastlane package_tests
@@ -167,7 +167,7 @@ Expected: all package tests pass; real-model tests may skip when unavailable.
 - Modify: `Sources/AriaApple/Providers/FoundationModelsProvider.swift:27-41`
 - Create: `Tests/AriaAppleTests/Providers/FoundationModelsLanguageModelTests.swift`
 
-- [ ] **Step 1: Add Xcode 27-only failing tests**
+- [x] **Step 1: Add Xcode 27-only failing tests**
 
 Under `#if canImport(FoundationModels) && compiler(>=6.4)` and `@available(iOS 27.0, macOS 27.0, *)`, add:
 
@@ -186,7 +186,7 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer /Users/prasadmini/
 
 Expected: compilation fails because the initializer and validator do not exist.
 
-- [ ] **Step 2: Implement the generic initializer**
+- [x] **Step 2: Implement the generic initializer**
 
 Add:
 
@@ -233,7 +233,7 @@ Build the required set from requested requirements plus:
 
 Throw `AgentError.configurationInvalid("Language model does not support: ...")` listing every missing capability. Do not reject extra Apple capabilities and do not add reasoning to `ProviderCapabilities`.
 
-- [ ] **Step 3: Verify stable and beta toolchains**
+- [x] **Step 3: Verify stable and beta toolchains**
 
 ```bash
 /Users/prasadmini/.rbenv/shims/bundle exec fastlane package_tests
@@ -242,7 +242,7 @@ DEVELOPER_DIR=/Applications/Xcode-beta.app/Contents/Developer /Users/prasadmini/
 
 Expected: stable Xcode excludes Swift 6.4 declarations; Xcode 27 compiles them; all runnable tests pass.
 
-- [ ] **Step 4: Commit**
+- [⚠️] **Step 4: Commit**
 
 ```bash
 git add Sources/AriaApple/Providers/FoundationModelsSessionFactory.swift Sources/AriaApple/Providers/FoundationModelsProvider.swift Tests/AriaAppleTests/Providers/FoundationModelsLanguageModelTests.swift
