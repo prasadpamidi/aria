@@ -217,15 +217,12 @@
             case .available:
                 return
             case let .unavailable(reason):
-                throw AgentError.providerFailed(
-                    "FoundationModels unavailable: \(String(describing: reason))",
-                    underlying: nil
-                )
+                throw FoundationModelsErrorMapper.mapUnavailable(reason)
             @unknown default:
-                throw AgentError.providerFailed(
-                    "FoundationModels availability unknown",
-                    underlying: nil
-                )
+                throw AgentError.providerRejected(.init(
+                    kind: .providerUnavailable,
+                    message: "Foundation Models availability is unknown"
+                ))
             }
         }
 
@@ -265,17 +262,8 @@
                     honourSelection: honourSelection,
                     continuation: continuation
                 )
-            } catch is CancellationError {
-                continuation.finish(throwing: AgentError.cancelled)
-            } catch let error as AgentError {
-                continuation.finish(throwing: error)
             } catch {
-                continuation.finish(
-                    throwing: AgentError.providerFailed(
-                        "FoundationModels stream failed",
-                        underlying: ErrorBox(error)
-                    )
-                )
+                continuation.finish(throwing: FoundationModelsErrorMapper.map(error))
             }
         }
 

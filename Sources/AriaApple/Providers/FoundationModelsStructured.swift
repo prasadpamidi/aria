@@ -47,17 +47,8 @@
                     type: type,
                     continuation: continuation
                 )
-            } catch is CancellationError {
-                continuation.finish(throwing: AgentError.cancelled)
-            } catch let error as AgentError {
-                continuation.finish(throwing: error)
             } catch {
-                continuation.finish(
-                    throwing: AgentError.providerFailed(
-                        "FoundationModels structured stream failed",
-                        underlying: ErrorBox(error)
-                    )
-                )
+                continuation.finish(throwing: FoundationModelsErrorMapper.map(error))
             }
         }
 

@@ -38,18 +38,19 @@
             for try await _ in stream { }
             XCTFail("Expected session factory validation to stop the stream", file: file, line: line)
         } catch let error as AgentError {
-            guard case let .providerFailed(_, underlying) = error else {
-                return XCTFail("Expected providerFailed, got \(error)", file: file, line: line)
+            guard case let .providerRejected(failure) = error else {
+                return XCTFail("Expected providerRejected, got \(error)", file: file, line: line)
             }
+            XCTAssertEqual(failure.kind, .unknown, file: file, line: line)
             XCTAssertEqual(
-                underlying?.typeName,
+                failure.underlying?.typeName,
                 "SessionFactoryTestError",
                 file: file,
                 line: line
             )
             XCTAssertTrue(
-                underlying?.message.contains("expectedRequirementsReached") == true,
-                "Expected the requested requirements to reach validation, got \(String(describing: underlying))",
+                failure.underlying?.message.contains("expectedRequirementsReached") == true,
+                "Expected the requested requirements to reach validation, got \(String(describing: failure.underlying))",
                 file: file,
                 line: line
             )
