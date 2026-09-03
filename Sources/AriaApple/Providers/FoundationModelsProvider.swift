@@ -18,8 +18,10 @@
     /// system prompts become `Instructions`, prior user turns become
     /// `prompt` entries, prior assistant text becomes `response` entries,
     /// prior tool calls become `toolCalls` entries, and prior tool
-    /// results become `toolOutput` entries. Only the *last* message in
-    /// the input array is sent as the new prompt to `streamResponse(to:)`.
+    /// results become `toolOutput` entries. On iOS 27, in-memory JPEG and
+    /// PNG content becomes an image attachment when the selected model
+    /// declares vision support. Only the *last* message in the input array
+    /// is sent as the new prompt to `streamResponse(to:)`.
     /// This avoids the transcript-style hallucination the model produces
     /// when given concatenated `User: …\nAssistant: …` text.
     @available(iOS 26.0, macOS 26.0, *)
@@ -120,6 +122,12 @@
 
         // MARK: Internal
 
+        struct PreparedInput {
+            let prompt: Prompt
+            let transcript: Transcript
+            let requiresVision: Bool
+        }
+
         static let maximumToolNameLength = 64
 
         // Read by extensions in sibling files (e.g.
@@ -151,6 +159,90 @@
                 )
             }
             return (last.textContent, Array(messages.dropLast()))
+        }
+
+        static func extractPromptMessage(
+            from messages: [Message]
+        ) throws -> (prompt: Message, history: [Message]) {
+            guard let last = messages.last else {
+                throw AgentError.configurationInvalid(
+                    "FoundationModelsProvider needs at least one message"
+                )
+            }
+            let hasPromptContent = last.content.contains { part in
+                switch part {
+                case .text, .image:
+                    true
+                case .audio, .toolUse, .toolResult:
+                    false
+                }
+            }
+            guard hasPromptContent else {
+                throw AgentError.configurationInvalid(
+                    "Last message must carry text or an image to seed the next response"
+                )
+            }
+            return (last, Array(messages.dropLast()))
+        }
+
+        static func containsImage(in content: [ContentPart]) -> Bool {
+            content.contains { part in
+                if case .image = part {
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+
+        static func prepareInput(
+            messages: [Message],
+            defaultInstructions: String?,
+            toolDefinitions: [Transcript.ToolDefinition],
+            supportsVision: Bool
+        ) throws -> PreparedInput {
+            let hasImages = messages.contains { self.containsImage(in: $0.content) }
+            guard hasImages else {
+                let extracted = try self.extractPrompt(from: messages)
+                return PreparedInput(
+                    prompt: Prompt(extracted.prompt),
+                    transcript: self.buildTranscript(
+                        history: extracted.history,
+                        defaultInstructions: defaultInstructions,
+                        toolDefinitions: toolDefinitions
+                    ),
+                    requiresVision: false
+                )
+            }
+
+            #if compiler(>=6.4)
+                guard #available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *) else {
+                    throw AgentError.providerRejected(.init(
+                        kind: .unsupportedCapability,
+                        message: "Foundation Models image input requires iOS 27 or macOS 27"
+                    ))
+                }
+                let extracted = try self.extractPromptMessage(from: messages)
+                let promptParts = try FoundationModelsImageBridge.resolve(
+                    extracted.prompt.content,
+                    supportsVision: supportsVision
+                )
+                return try PreparedInput(
+                    prompt: FoundationModelsImageBridge.prompt(from: promptParts),
+                    transcript: self.buildMultimodalTranscript(
+                        history: extracted.history,
+                        defaultInstructions: defaultInstructions,
+                        toolDefinitions: toolDefinitions,
+                        supportsVision: supportsVision
+                    ),
+                    requiresVision: true
+                )
+            #else
+                throw AgentError.providerRejected(.init(
+                    kind: .unsupportedCapability,
+                    message: "Foundation Models image input requires the iOS 27 SDK"
+                ))
+            #endif
         }
 
         /// Convert prior `Message` history into a `Transcript`. System
@@ -280,7 +372,6 @@
             honourSelection: Bool,
             continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation
         ) async throws {
-            let (prompt, history) = try Self.extractPrompt(from: messages)
             // Build the typed FM tools. Each factory is invoked with a
             // closure that yields events into this stream's
             // continuation, so per-call `toolCallExecuted` events flow
@@ -330,18 +421,22 @@
                 fmLog.error("tool not offered to FoundationModels: \(reason, privacy: .public)")
             }
             let toolDefinitions = registrableTools.map { Transcript.ToolDefinition(tool: $0) }
-            let transcript = Self.buildTranscript(
-                history: history,
+            let input = try Self.prepareInput(
+                messages: messages,
                 defaultInstructions: self.defaultInstructions,
-                toolDefinitions: toolDefinitions
+                toolDefinitions: toolDefinitions,
+                supportsVision: self.capabilities.supportsVision
             )
             var requirements: FoundationModelsSessionRequirements = []
             if !registrableTools.isEmpty {
                 requirements.insert(.toolCalling)
             }
+            if input.requiresVision {
+                requirements.insert(.vision)
+            }
             let session = try self.sessionFactory.makeSession(
                 tools: registrableTools,
-                transcript: transcript,
+                transcript: input.transcript,
                 requirements: requirements,
                 modelIdentifier: self.capabilities.modelIdentifier,
                 profileConfiguration: self.profileConfiguration
@@ -351,7 +446,7 @@
             continuation.yield(.messageStart(messageId: messageId))
 
             var emittedCount = 0
-            let stream = session.streamResponse(to: prompt)
+            let stream = session.streamResponse(to: input.prompt)
             for try await snapshot in stream {
                 try Task.checkCancellation()
                 // Extract the cumulative text synchronously inside the loop
