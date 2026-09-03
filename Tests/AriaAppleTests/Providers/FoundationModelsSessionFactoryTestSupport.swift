@@ -22,7 +22,7 @@
                 }
                 throw SessionFactoryTestError.expectedRequirementsReached
             },
-            build: { _, _, _ in
+            build: { _, _, _, _, _ in
                 throw SessionFactoryTestError.builderReached
             }
         )

@@ -29,12 +29,14 @@
         public init(
             defaultInstructions: String? = nil,
             capabilities: ProviderCapabilities = .foundationModelsDefault,
-            typedTools: [FoundationModelsToolFactory] = []
+            typedTools: [FoundationModelsToolFactory] = [],
+            profileConfiguration: FoundationModelsProfileConfiguration? = nil
         ) {
             self.init(
                 defaultInstructions: defaultInstructions,
                 capabilities: capabilities,
                 typedTools: typedTools,
+                profileConfiguration: profileConfiguration,
                 sessionFactory: .systemDefault
             )
         }
@@ -46,12 +48,14 @@
                 model: some LanguageModel,
                 defaultInstructions: String? = nil,
                 capabilities: ProviderCapabilities,
-                typedTools: [FoundationModelsToolFactory] = []
+                typedTools: [FoundationModelsToolFactory] = [],
+                profileConfiguration: FoundationModelsProfileConfiguration? = nil
             ) {
                 self.init(
                     defaultInstructions: defaultInstructions,
                     capabilities: capabilities,
                     typedTools: typedTools,
+                    profileConfiguration: profileConfiguration,
                     sessionFactory: .injected(
                         model: model,
                         declaredCapabilities: capabilities
@@ -64,11 +68,13 @@
             defaultInstructions: String? = nil,
             capabilities: ProviderCapabilities = .foundationModelsDefault,
             typedTools: [FoundationModelsToolFactory] = [],
+            profileConfiguration: FoundationModelsProfileConfiguration? = nil,
             sessionFactory: FoundationModelsSessionFactory
         ) {
             self.defaultInstructions = defaultInstructions
             self.capabilities = capabilities
             self.typedTools = typedTools
+            self.profileConfiguration = profileConfiguration
             self.sessionFactory = sessionFactory
         }
 
@@ -120,6 +126,7 @@
         // `FoundationModelsStructured.swift`).
         let defaultInstructions: String?
         let typedTools: [FoundationModelsToolFactory]
+        let profileConfiguration: FoundationModelsProfileConfiguration?
         let sessionFactory: FoundationModelsSessionFactory
 
         /// Pull the new-turn prompt out of the message list. Returns the
@@ -335,7 +342,9 @@
             let session = try self.sessionFactory.makeSession(
                 tools: registrableTools,
                 transcript: transcript,
-                requirements: requirements
+                requirements: requirements,
+                modelIdentifier: self.capabilities.modelIdentifier,
+                profileConfiguration: self.profileConfiguration
             )
 
             let messageId = UUID().uuidString

@@ -86,7 +86,9 @@
             let session = try self.sessionFactory.makeSession(
                 tools: fmTools,
                 transcript: transcript,
-                requirements: requirements
+                requirements: requirements,
+                modelIdentifier: self.capabilities.modelIdentifier,
+                profileConfiguration: self.profileConfiguration
             )
 
             let stream = session.streamResponse(to: prompt, generating: type)
