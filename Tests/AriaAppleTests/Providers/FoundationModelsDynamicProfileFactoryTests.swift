@@ -1,6 +1,7 @@
 #if canImport(FoundationModels) && (os(iOS) || os(macOS) || os(watchOS) || os(tvOS) || os(visionOS))
     import Aria
     @testable import AriaApple
+    import Foundation
     import FoundationModels
     import XCTest
 
@@ -142,6 +143,9 @@
             @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
             @available(tvOS, unavailable)
             func testDynamicProfileConstructsARealSession() throws {
+                guard ProcessInfo.processInfo.environment["ARIA_RUN_EVALS"] == "1" else {
+                    throw XCTSkip("Runs a real model; set ARIA_RUN_EVALS=1")
+                }
                 guard #available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *) else {
                     throw XCTSkip("Requires iOS 27 / macOS 27 runtime")
                 }
