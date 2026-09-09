@@ -140,8 +140,7 @@
         }
 
         #if compiler(>=6.4)
-            @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
-            @available(tvOS, unavailable)
+            #if !os(tvOS)
             func testDynamicProfileConstructsARealSession() throws {
                 guard ProcessInfo.processInfo.environment["ARIA_RUN_EVALS"] == "1" else {
                     throw XCTSkip("Runs a real model; set ARIA_RUN_EVALS=1")
@@ -152,6 +151,11 @@
                 guard SystemLanguageModel.default.availability == .available else {
                     throw XCTSkip("Requires available Foundation Models assets")
                 }
+                try self.assertDynamicProfileConstructsARealSession()
+            }
+
+            @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
+            private func assertDynamicProfileConstructsARealSession() throws {
                 let transcript = FoundationModelsProvider.buildTranscript(
                     history: [.user("previous prompt"), .assistant("previous response")],
                     defaultInstructions: "Be concise.",
@@ -175,6 +179,7 @@
                 XCTAssertEqual(entryKind(session.transcript[0]), "instructions")
                 XCTAssertEqual(entryKind(session.transcript[1]), "response")
             }
+            #endif
         #endif
 
         private func entryKind(_ entry: Transcript.Entry) -> String {
