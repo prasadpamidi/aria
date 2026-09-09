@@ -68,7 +68,31 @@
                 StructuredResponseEvent<Content>, any Error
             >.Continuation
         ) async throws where Content.PartiallyGenerated: Sendable {
-            let (prompt, history) = try Self.extractPrompt(from: messages)
+            let (promptContent, history) = try Self.extractPromptContent(from: messages)
+            let resolvedImages = try promptContent.resolveImages()
+            let multimodalPrompt: FoundationModels.Prompt?
+            if promptContent.requiresVision {
+                #if compiler(>=6.4)
+                    guard #available(
+                        iOS 27.0,
+                        macOS 27.0,
+                        visionOS 27.0,
+                        watchOS 27.0,
+                        *
+                    ) else {
+                        throw AgentError.configurationInvalid(
+                            "FoundationModels image prompts require iOS 27 or macOS 27"
+                        )
+                    }
+                    multimodalPrompt = promptContent.makePrompt(images: resolvedImages)
+                #else
+                    throw AgentError.configurationInvalid(
+                        "FoundationModels image prompts require the iOS 27 SDK"
+                    )
+                #endif
+            } else {
+                multimodalPrompt = nil
+            }
 
             // Forward each tool's `toolCallExecuted` ProviderEvent into
             // the structured stream so consumers see mid-response tool
@@ -92,13 +116,21 @@
             if !fmTools.isEmpty {
                 requirements.insert(.toolCalling)
             }
+            if promptContent.requiresVision {
+                requirements.insert(.vision)
+            }
             let session = try self.sessionFactory.makeSession(
                 tools: fmTools,
                 transcript: transcript,
                 requirements: requirements
             )
 
-            let stream = session.streamResponse(to: prompt, generating: type)
+            let stream: LanguageModelSession.ResponseStream<Content> =
+                if let multimodalPrompt {
+                    session.streamResponse(to: multimodalPrompt, generating: type)
+                } else {
+                    session.streamResponse(to: promptContent.text, generating: type)
+                }
             var lastRaw: GeneratedContent?
             for try await snapshot in stream {
                 try Task.checkCancellation()

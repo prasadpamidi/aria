@@ -133,6 +133,13 @@
         static func extractPrompt(
             from messages: [Message]
         ) throws -> (prompt: String, history: [Message]) {
+            let (content, history) = try self.extractPromptContent(from: messages)
+            return (content.text, history)
+        }
+
+        static func extractPromptContent(
+            from messages: [Message]
+        ) throws -> (content: FoundationModelsPromptContent, history: [Message]) {
             guard let last = messages.last else {
                 throw AgentError.configurationInvalid(
                     "FoundationModelsProvider needs at least one message"
@@ -143,7 +150,17 @@
                     "Last message must carry text to seed the next response"
                 )
             }
-            return (last.textContent, Array(messages.dropLast()))
+            let images = last.content.compactMap { part -> ImageContent? in
+                if case let .image(image) = part {
+                    image
+                } else {
+                    nil
+                }
+            }
+            return (
+                FoundationModelsPromptContent(text: last.textContent, images: images),
+                Array(messages.dropLast())
+            )
         }
 
         /// Convert prior `Message` history into a `Transcript`. System
@@ -285,7 +302,31 @@
             honourSelection: Bool,
             continuation: AsyncThrowingStream<ProviderEvent, any Error>.Continuation
         ) async throws {
-            let (prompt, history) = try Self.extractPrompt(from: messages)
+            let (promptContent, history) = try Self.extractPromptContent(from: messages)
+            let resolvedImages = try promptContent.resolveImages()
+            let multimodalPrompt: FoundationModels.Prompt?
+            if promptContent.requiresVision {
+                #if compiler(>=6.4)
+                    guard #available(
+                        iOS 27.0,
+                        macOS 27.0,
+                        visionOS 27.0,
+                        watchOS 27.0,
+                        *
+                    ) else {
+                        throw AgentError.configurationInvalid(
+                            "FoundationModels image prompts require iOS 27 or macOS 27"
+                        )
+                    }
+                    multimodalPrompt = promptContent.makePrompt(images: resolvedImages)
+                #else
+                    throw AgentError.configurationInvalid(
+                        "FoundationModels image prompts require the iOS 27 SDK"
+                    )
+                #endif
+            } else {
+                multimodalPrompt = nil
+            }
             // Build the typed FM tools. Each factory is invoked with a
             // closure that yields events into this stream's
             // continuation, so per-call `toolCallExecuted` events flow
@@ -344,6 +385,9 @@
             if !registrableTools.isEmpty {
                 requirements.insert(.toolCalling)
             }
+            if promptContent.requiresVision {
+                requirements.insert(.vision)
+            }
             let session = try self.sessionFactory.makeSession(
                 tools: registrableTools,
                 transcript: transcript,
@@ -354,7 +398,12 @@
             continuation.yield(.messageStart(messageId: messageId))
 
             var emittedCount = 0
-            let stream = session.streamResponse(to: prompt)
+            let stream: LanguageModelSession.ResponseStream<String> =
+                if let multimodalPrompt {
+                    session.streamResponse(to: multimodalPrompt)
+                } else {
+                    session.streamResponse(to: promptContent.text)
+                }
             for try await snapshot in stream {
                 try Task.checkCancellation()
                 // Extract the cumulative text synchronously inside the loop
