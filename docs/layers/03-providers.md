@@ -264,12 +264,11 @@ into the native Foundation Models `Prompt`. The same conversion is used by
 plain streaming and `Agent.respond(_:as:)`, so guided generation does not lose
 the image while producing typed output.
 
-- `ImageContent.Source.data` is decoded and passed as an Apple image
-  attachment. Decoding also removes encoded metadata from the prompt payload.
-- `ImageContent.Source.url` must be a readable local image file. Aria does not
-  fetch remote URLs.
-- `ImageContent.Source.identifier` must be resolved by the application before
-  calling the provider.
+- `ImageContent.Source.data` accepts declared JPEG or PNG data, verifies the
+  encoded type, decodes it, and passes an Apple image attachment. Decoding also
+  removes encoded metadata from the prompt payload.
+- `ImageContent.Source.url` and `ImageContent.Source.identifier` must be
+  resolved to in-memory data by the application before calling the provider.
 - Invalid or unresolved sources fail as `AgentError.configurationInvalid`
   before a model session is created.
 - Image prompts explicitly request the Foundation Models vision capability and
@@ -277,8 +276,9 @@ the image while producing typed output.
 
 The existing text-only path remains available on iOS 26. Consumers injecting a
 custom `LanguageModel` must describe its real vision support in the supplied
-`ProviderCapabilities`; Aria validates the requested vision capability against
-the model before generation.
+`ProviderCapabilities`. Aria rejects image input when that declaration is
+false, then validates the requested vision capability against the model before
+generation.
 
 ### Foundation Models model injection
 

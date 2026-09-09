@@ -148,13 +148,6 @@
         static func extractPrompt(
             from messages: [Message]
         ) throws -> (prompt: String, history: [Message]) {
-            let (content, history) = try self.extractPromptContent(from: messages)
-            return (content.text, history)
-        }
-
-        static func extractPromptContent(
-            from messages: [Message]
-        ) throws -> (content: FoundationModelsPromptContent, history: [Message]) {
             guard let last = messages.last else {
                 throw AgentError.configurationInvalid(
                     "FoundationModelsProvider needs at least one message"
@@ -165,17 +158,7 @@
                     "Last message must carry text to seed the next response"
                 )
             }
-            let images = last.content.compactMap { part -> ImageContent? in
-                if case let .image(image) = part {
-                    image
-                } else {
-                    nil
-                }
-            }
-            return (
-                FoundationModelsPromptContent(text: last.textContent, images: images),
-                Array(messages.dropLast())
-            )
+            return (last.textContent, Array(messages.dropLast()))
         }
 
         static func extractPromptMessage(

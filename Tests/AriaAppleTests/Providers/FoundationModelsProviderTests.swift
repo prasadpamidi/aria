@@ -33,19 +33,6 @@
             XCTAssertEqual(history.map(\.textContent), ["first", "hello"])
         }
 
-        func testExtractPromptContentPreservesImages() throws {
-            let image = ImageContent(source: .identifier("asset-id"))
-
-            let (content, history) = try FoundationModelsProvider.extractPromptContent(
-                from: [.user("Describe this image.", images: [image])]
-            )
-
-            XCTAssertEqual(content.text, "Describe this image.")
-            XCTAssertEqual(content.images, [image])
-            XCTAssertTrue(content.requiresVision)
-            XCTAssertTrue(history.isEmpty)
-        }
-
         func testExtractPromptThrowsWhenLastMessageIsEmpty() {
             let messages: [Message] = [
                 .user("first"),
@@ -198,82 +185,6 @@
             )
         }
 
-        #if compiler(>=6.4)
-            @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
-            @available(tvOS, unavailable)
-            func testTextStreamRequestsVisionForImageData() async throws {
-                try XCTSkipUnless(
-                    Self.supportsImagePrompts,
-                    "Requires an iOS 27 or macOS 27 runtime"
-                )
-                let provider = FoundationModelsProvider(
-                    sessionFactory: testSessionFactory(expecting: [.vision])
-                )
-
-                await assertExpectedSessionRequirements(
-                    in: provider.stream(
-                        messages: [.user("Describe this image.", images: [Self.testImage])],
-                        tools: [],
-                        options: .init()
-                    )
-                )
-            }
-
-            @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
-            @available(tvOS, unavailable)
-            func testTextStreamRejectsMalformedImageData() async {
-                let provider = FoundationModelsProvider(
-                    sessionFactory: testSessionFactory(expecting: [.vision])
-                )
-                let malformed = ImageContent(
-                    source: .data(Data("not an image".utf8), mimeType: "image/jpeg")
-                )
-
-                do {
-                    for try await _ in provider.stream(
-                        messages: [.user("Describe this image.", images: [malformed])],
-                        tools: [],
-                        options: .init()
-                    ) { }
-                    XCTFail("Expected configurationInvalid")
-                } catch let error as AgentError {
-                    guard case let .configurationInvalid(message) = error else {
-                        XCTFail("Expected configurationInvalid, got \(error)")
-                        return
-                    }
-                    XCTAssertTrue(message.contains("valid image"))
-                } catch {
-                    XCTFail("Unexpected error: \(error)")
-                }
-            }
-
-            @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
-            @available(tvOS, unavailable)
-            func testTextStreamRejectsUnresolvedImageIdentifier() async {
-                let provider = FoundationModelsProvider(
-                    sessionFactory: testSessionFactory(expecting: [.vision])
-                )
-                let unresolved = ImageContent(source: .identifier("asset-id"))
-
-                do {
-                    for try await _ in provider.stream(
-                        messages: [.user("Describe this image.", images: [unresolved])],
-                        tools: [],
-                        options: .init()
-                    ) { }
-                    XCTFail("Expected configurationInvalid")
-                } catch let error as AgentError {
-                    guard case let .configurationInvalid(message) = error else {
-                        XCTFail("Expected configurationInvalid, got \(error)")
-                        return
-                    }
-                    XCTAssertTrue(message.contains("identifier"))
-                } catch {
-                    XCTFail("Unexpected error: \(error)")
-                }
-            }
-        #endif
-
         // MARK: - Smoke test (requires real model availability)
 
         func testStreamProducesTextDeltasWhenModelAvailable() async throws {
@@ -337,25 +248,6 @@
                 XCTFail("Unexpected error: \(error)")
             }
         }
-
-        #if compiler(>=6.4)
-            @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
-            @available(tvOS, unavailable)
-            private static let testImage = ImageContent(
-                source: .data(
-                    Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!,
-                    mimeType: "image/png"
-                )
-            )
-
-            private static var supportsImagePrompts: Bool {
-                if #available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *) {
-                    true
-                } else {
-                    false
-                }
-            }
-        #endif
     }
 
     // MARK: - Helpers

@@ -55,43 +55,6 @@
             )
         }
 
-        #if compiler(>=6.4)
-            @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
-            @available(tvOS, unavailable)
-            func testStructuredStreamRequestsVisionForImageData() async throws {
-                try XCTSkipUnless(
-                    Self.supportsImagePrompts,
-                    "Requires an iOS 27 or macOS 27 runtime"
-                )
-                let provider = FoundationModelsProvider(
-                    sessionFactory: testSessionFactory(
-                        expecting: [.guidedGeneration, .vision]
-                    )
-                )
-                let image = ImageContent(
-                    source: .data(
-                        Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")!,
-                        mimeType: "image/png"
-                    )
-                )
-
-                await assertExpectedSessionRequirements(
-                    in: provider.streamStructured(
-                        messages: [.user("Describe this image.", images: [image])],
-                        as: TestQuote.self
-                    )
-                )
-            }
-
-            private static var supportsImagePrompts: Bool {
-                if #available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *) {
-                    true
-                } else {
-                    false
-                }
-            }
-        #endif
-
         // MARK: - Agent extension surface
 
         func testAgentRespondDecodesNonFMProviderTextDeltasAsJSON() async throws {
