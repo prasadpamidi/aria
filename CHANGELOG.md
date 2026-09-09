@@ -7,6 +7,27 @@ and Aria adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-09
+
+### Added
+
+- **Foundation Models Dynamic Profiles on iOS 27 and related platform
+  releases.** Applications can configure model selection, tools, instructions,
+  bounded history, transcript failure policy, response limits, and lifecycle
+  observability while retaining the existing iOS 26 session path.
+- **Foundation Models multimodal prompts.** Text streaming and typed structured
+  generation now preserve validated in-memory JPEG and PNG image content and
+  explicitly request vision capability from system or injected models.
+- **Typed Foundation Models failures.** Provider rejections expose stable
+  categories for unsupported capabilities, context limits, safety decisions,
+  and other failure policies without requiring consumers to inspect error text.
+
+### Changed
+
+- Foundation Models prompt, transcript, error, and session construction now use
+  shared conversion paths so text-only, multimodal, system-model, and custom
+  model execution behave consistently.
+
 ## [0.12.0] - 2026-08-30
 
 ### Added

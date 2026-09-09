@@ -278,6 +278,11 @@ import WorkflowKit
                 return error.localizedDescription
             }
             switch agentError {
+            case let .providerRejected(failure):
+                if let underlying = failure.underlying {
+                    return "Provider rejected (\(failure.kind.rawValue)): \(Self.condense(underlying.message))"
+                }
+                return "Provider rejected (\(failure.kind.rawValue)): \(failure.message)"
             case let .providerFailed(message, underlying):
                 if let underlying {
                     return "Provider failed: \(message) — \(Self.condense(underlying.message))"

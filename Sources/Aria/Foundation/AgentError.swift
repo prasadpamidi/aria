@@ -7,6 +7,9 @@ import Foundation
 /// All recoverable errors travel as `AgentError` so callers can pattern-match
 /// instead of relying on string comparison or untyped `Error` values.
 public enum AgentError: Error, Sendable, Equatable {
+    /// The provider rejected a request with a stable, actionable category.
+    case providerRejected(ProviderFailure)
+
     /// The provider failed for a reason the underlying SDK reported. The
     /// optional `underlying` carries the original error if available.
     case providerFailed(String, underlying: ErrorBox? = nil)
@@ -36,6 +39,50 @@ public enum AgentError: Error, Sendable, Equatable {
 
     /// Configuration validation failed at run time.
     case configurationInvalid(String)
+}
+
+// MARK: - ProviderFailureKind
+
+/// Provider-independent failure categories suitable for fallback policy and
+/// observability. Providers translate their SDK-specific errors at the edge.
+public enum ProviderFailureKind: String, Error, Sendable, Equatable {
+    case providerUnavailable
+    case assetsUnavailable
+    case sessionConflict
+    case transcriptMutation
+    case safetyRejected
+    case contextWindowExceeded
+    case unsupportedCapability
+    case unsupportedTranscript
+    case unsupportedGenerationGuide
+    case unsupportedLanguageOrLocale
+    case rateLimited
+    case timedOut
+    case invalidOutput
+    case unknown
+}
+
+// MARK: - ProviderFailure
+
+/// A provider failure with a stable category and preserved SDK diagnostics.
+public struct ProviderFailure: Sendable, Equatable {
+    // MARK: Lifecycle
+
+    public init(
+        kind: ProviderFailureKind,
+        message: String,
+        underlying: ErrorBox? = nil
+    ) {
+        self.kind = kind
+        self.message = message
+        self.underlying = underlying
+    }
+
+    // MARK: Public
+
+    public let kind: ProviderFailureKind
+    public let message: String
+    public let underlying: ErrorBox?
 }
 
 // MARK: - ErrorBox

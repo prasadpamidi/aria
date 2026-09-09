@@ -63,6 +63,85 @@
             }
         }
 
+        #if compiler(>=6.4)
+            @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
+            static func buildMultimodalTranscript(
+                history: [Message],
+                defaultInstructions: String?,
+                toolDefinitions: [Transcript.ToolDefinition],
+                supportsVision: Bool
+            ) throws -> Transcript {
+                if history.contains(where: { message in
+                    message.role == .system && self.containsImage(in: message.content)
+                }) {
+                    throw AgentError.configurationInvalid(
+                        "Foundation Models does not accept image attachments in system instructions"
+                    )
+                }
+
+                var entries: [Transcript.Entry] = []
+                if let instructions = self.makeInstructions(
+                    history: history,
+                    defaultInstructions: defaultInstructions,
+                    toolDefinitions: toolDefinitions
+                ) {
+                    entries.append(.instructions(instructions))
+                }
+
+                let toolNames = self.toolNameMap(in: history)
+                for message in history where message.role != .system {
+                    try entries.append(contentsOf: self.multimodalEntries(
+                        for: message,
+                        toolNames: toolNames,
+                        supportsVision: supportsVision
+                    ))
+                }
+                return Transcript(entries: entries)
+            }
+
+            @available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *)
+            private static func multimodalEntries(
+                for message: Message,
+                toolNames: [String: String],
+                supportsVision: Bool
+            ) throws -> [Transcript.Entry] {
+                let parts = try FoundationModelsImageBridge.resolve(
+                    message.content,
+                    supportsVision: supportsVision
+                )
+                let segments = FoundationModelsImageBridge.transcriptSegments(from: parts)
+
+                switch message.role {
+                case .user:
+                    guard !segments.isEmpty else {
+                        return []
+                    }
+                    return [.prompt(.init(segments: segments))]
+                case .assistant:
+                    var entries: [Transcript.Entry] = []
+                    if !segments.isEmpty {
+                        entries.append(.response(.init(assetIDs: [], segments: segments)))
+                    }
+                    let calls = message.toolCalls.compactMap(self.transcriptToolCall(from:))
+                    if !calls.isEmpty {
+                        entries.append(.toolCalls(.init(calls)))
+                    }
+                    return entries
+                case .tool:
+                    let id = message.toolCallId ?? UUID().uuidString
+                    return [
+                        .toolOutput(.init(
+                            id: id,
+                            toolName: toolNames[id] ?? "unknown",
+                            segments: segments
+                        )),
+                    ]
+                case .system:
+                    return []
+                }
+            }
+        #endif
+
         // MARK: - Per-role entry builders
 
         private static func entriesForUser(_ message: Message) -> [Transcript.Entry] {
@@ -105,7 +184,7 @@
             return [.toolOutput(output)]
         }
 
-        private static func transcriptToolCall(from call: ToolCall) -> Transcript.ToolCall? {
+        static func transcriptToolCall(from call: ToolCall) -> Transcript.ToolCall? {
             guard let data = try? call.arguments.canonicalData(),
                   let json = String(bytes: data, encoding: .utf8),
                   let content = try? GeneratedContent(json: json) else {

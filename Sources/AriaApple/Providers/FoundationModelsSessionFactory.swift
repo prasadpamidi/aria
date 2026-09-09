@@ -31,25 +31,55 @@
         typealias Builder = @Sendable (
             [any FoundationModels.Tool],
             Transcript,
-            FoundationModelsSessionRequirements
+            FoundationModelsSessionRequirements,
+            String,
+            FoundationModelsProfileConfiguration?
         ) throws -> LanguageModelSession
 
         static let systemDefault = Self(
             validate: { _ in
                 try FoundationModelsProvider.checkAvailability()
             },
-            build: { tools, transcript, _ in
-                LanguageModelSession(tools: tools, transcript: transcript)
+            build: { tools, transcript, _, modelIdentifier, profileConfiguration in
+                #if compiler(>=6.4)
+                    if #available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *),
+                       let profileConfiguration {
+                        return try FoundationModelsDynamicProfileFactory.makeSession(
+                            model: SystemLanguageModel.default,
+                            modelIdentifier: modelIdentifier,
+                            tools: tools,
+                            transcript: transcript,
+                            configuration: profileConfiguration
+                        )
+                    }
+                #endif
+                guard profileConfiguration == nil else {
+                    throw AgentError.configurationInvalid(
+                        "Foundation Models Dynamic Profiles require iOS 27 or macOS 27"
+                    )
+                }
+                return LanguageModelSession(tools: tools, transcript: transcript)
             }
         )
 
         func makeSession(
             tools: [any FoundationModels.Tool],
             transcript: Transcript,
-            requirements: FoundationModelsSessionRequirements
+            requirements: FoundationModelsSessionRequirements,
+            modelIdentifier: String,
+            profileConfiguration: FoundationModelsProfileConfiguration?
         ) throws -> LanguageModelSession {
             try self.validate(requirements)
-            return try self.build(tools, transcript, requirements)
+            if let profileConfiguration {
+                try FoundationModelsDynamicProfileFactory.validate(profileConfiguration)
+            }
+            return try self.build(
+                tools,
+                transcript,
+                requirements,
+                modelIdentifier,
+                profileConfiguration
+            )
         }
 
         // MARK: Private
@@ -81,8 +111,17 @@
                             requested: requested
                         )
                     },
-                    build: { tools, transcript, _ in
-                        LanguageModelSession(
+                    build: { tools, transcript, _, modelIdentifier, profileConfiguration in
+                        if let profileConfiguration {
+                            return try FoundationModelsDynamicProfileFactory.makeSession(
+                                model: model,
+                                modelIdentifier: modelIdentifier,
+                                tools: tools,
+                                transcript: transcript,
+                                configuration: profileConfiguration
+                            )
+                        }
+                        return LanguageModelSession(
                             model: model,
                             tools: tools,
                             transcript: transcript
