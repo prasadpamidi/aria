@@ -56,8 +56,9 @@ extension Message {
 
     /// Build a user message with one or more images attached. Each
     /// image is appended as a `ContentPart.image(...)` after the
-    /// text part. Vision-capable providers consume them; each provider
-    /// defines whether unsupported image input is rejected or ignored.
+    /// text part. Vision-capable providers consume them; providers
+    /// without vision support reject or otherwise handle them according
+    /// to their capability policy.
     public static func user(
         _ text: String,
         images: [ImageContent],
