@@ -145,6 +145,9 @@
                 guard #available(iOS 27.0, macOS 27.0, visionOS 27.0, watchOS 27.0, *) else {
                     throw XCTSkip("Requires iOS 27 / macOS 27 runtime")
                 }
+                guard SystemLanguageModel.default.availability == .available else {
+                    throw XCTSkip("Requires available Foundation Models assets")
+                }
                 let transcript = FoundationModelsProvider.buildTranscript(
                     history: [.user("previous prompt"), .assistant("previous response")],
                     defaultInstructions: "Be concise.",
