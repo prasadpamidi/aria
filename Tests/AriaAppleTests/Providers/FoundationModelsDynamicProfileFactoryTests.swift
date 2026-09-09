@@ -7,6 +7,12 @@
 
     @available(iOS 26.0, macOS 26.0, *)
     final class FoundationModelsDynamicProfileFactoryTests: XCTestCase {
+        override func setUpWithError() throws {
+            guard #available(iOS 26.0, macOS 26.0, *) else {
+                throw XCTSkip("Requires iOS 26 / macOS 26 runtime")
+            }
+        }
+
         func testDescriptorCapturesEffectiveProfileInputs() {
             let transcript = FoundationModelsProvider.buildTranscript(
                 history: [
